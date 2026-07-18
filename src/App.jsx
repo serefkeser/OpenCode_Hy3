@@ -3335,6 +3335,7 @@ export default function App() {
     };
 
     const [studioMedia, setStudioMedia] = useState({ outroUrl: null, musicLoaded: false, musicName: '', musicId: '', musicList: [], customSceneImages: [], isLoading: true, statusMsg: 'Bulut Kontrol Ediliyor...', syncedFolderName: '' });
+    const [customMusicList, setCustomMusicList] = useState([]);
     const [musicSearchQuery, setMusicSearchQuery] = useState('');
 
     const canvasRef = useRef(null);
@@ -3357,6 +3358,9 @@ export default function App() {
     // Yerel Muzik/ klasörü (public/Muzik/) — doğrudan UI'da listelenir, IndexedDB gerekmez
     const filteredLocalMusic = LOCAL_MUSIC_LIBRARY.filter(m => !musicSearchQuery || m.title.toLowerCase().includes(musicSearchQuery.toLowerCase()));
     if (filteredLocalMusic.length > 0) ambientOptions.push({ label: `🎶 Yerel Müzik (${filteredLocalMusic.length})`, options: filteredLocalMusic.map(m => ({ value: m.id, label: `🎶 ${m.title}`, color: 'text-emerald-400' })) });
+    // Kullanıcının "MÜZİK KLASÖRÜ SEÇ" ile eklediği müzikler (runtime, object URL)
+    const filteredCustomMusic = customMusicList.filter(m => !musicSearchQuery || (m.title || m.name).toLowerCase().includes(musicSearchQuery.toLowerCase()));
+    if (filteredCustomMusic.length > 0) ambientOptions.push({ label: `📂 Eklenen Müzikler (${filteredCustomMusic.length})`, options: filteredCustomMusic.map(m => ({ value: m.id, label: `📂 ${m.title || m.name}`, color: 'text-amber-400' })) });
 
     const voiceOptions = [
         { value: 'none', label: '🔇 Ses Yok', color: 'text-rose-400 font-bold' },
@@ -3583,50 +3587,18 @@ export default function App() {
                 if (detectedUrl) addSystemLog(`Sunucu bulundu: ${detectedUrl}`, 'success');
                 else addSystemLog('Müzik proxy sunucusu bulunamadı — CORS proxy kullanılacak', 'warn');
 
-                const allMusic = await AssetManagerService.getAllMusicFromLib();
-                setStudioMedia(s => ({ ...s, musicList: [...allMusic], isLoading: false, statusMsg: 'Yerel Mod' }));
+                const allMusic = LOCAL_MUSIC_LIBRARY;
                 if (allMusic.length > 0) {
-                    addSystemLog(`${allMusic.length} müzik IndexedDB'den yüklendi.`, 'success');
+                    addSystemLog(`${allMusic.length} müzik public/Muzik/ klasöründen yüklendi.`, 'success');
                 } else {
-                    addSystemLog("Müzik kütüphanesi boş. Klasör seçerek müzik ekleyin.", 'info');
+                    addSystemLog("Müzik klasörü boş. Dosyaları public/Muzik/ altına ekleyin.", 'info');
                 }
                 // Varsayılan müzik seçimi: müzik varsa ve hiçbiri seçili değilse ilk müziği seç
                 const savedPrefs = JSON.parse(SafeStorage.getItem('ns_prefs')) || {};
                 if (allMusic.length > 0 && (!savedPrefs.ambientSound || savedPrefs.ambientSound === 'none')) {
                     const firstTrack = allMusic[0];
-                    setPrefs(p => ({ ...p, ambientSound: firstTrack.id, customBgMusicName: firstTrack.name, customBgMusicId: firstTrack.id }));
-                    addSystemLog(`Otomatik seçim: ${firstTrack.name}`, 'info');
-                }
-                if (savedPrefs.ambientSound && !['none', 'rain', 'wind', 'waves', 'fire'].includes(savedPrefs.ambientSound)) {
-                    const track = allMusic.find(m => m.id === savedPrefs.ambientSound);
-                    if (track && track.data) {
-                        const raw = track.data.includes(',') ? track.data.split(',')[1] : track.data;
-                        const byteString = atob(raw);
-                        const ab = new ArrayBuffer(byteString.length);
-                        const ia = new Uint8Array(ab);
-                        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-                        const blob = new Blob([ab], { type: 'audio/mpeg' });
-                        const url = URL.createObjectURL(blob);
-                        await AssetManagerService.saveMedia('CUSTOM_MUSIC', url);
-                    }
-                }
-                const savedDir = await AssetManagerService.getDirHandle();
-                if (savedDir && savedDir.handle) {
-                    try {
-                        const permission = await savedDir.handle.requestPermission({ mode: 'read' });
-                        if (permission === 'granted') {
-                            addSystemLog(`Otomatik müzik senkronizasyonu: ${savedDir.name}`, 'info');
-                            const currentMusic = await AssetManagerService.getAllMusicFromLib();
-                            const newCount = await syncMusicFromDir(savedDir.handle, currentMusic);
-                            if (newCount > 0) {
-                                const updated = await AssetManagerService.getAllMusicFromLib();
-                                setStudioMedia(s => ({ ...s, musicList: updated }));
-                                addSystemLog(`${newCount} yeni müzik otomatik eklendi. Toplam: ${updated.length}`, 'success');
-                            }
-                        }
-                    } catch (e) {
-                        console.warn("Otomatik senkronizasyon hatası:", e);
-                    }
+                    setPrefs(p => ({ ...p, ambientSound: firstTrack.id, customBgMusicName: firstTrack.title, customBgMusicId: firstTrack.id }));
+                    addSystemLog(`Otomatik seçim: ${firstTrack.title}`, 'info');
                 }
             } catch (e) { setStudioMedia(s => ({ ...s, isLoading: false, statusMsg: 'Yerel Mod' })); }
         };
@@ -3722,7 +3694,7 @@ export default function App() {
     const handleOutroDelete = async () => { await AssetManagerService.deleteMedia('CUSTOM_OUTRO'); setStudioMedia(s => ({ ...s, outroUrl: null })); await saveToFirestore({ outroChunksCount: null, backCover: null }); };
     const handleCustomSceneImagesUpload = async (e) => { const files = Array.from(e.target.files); if (!files.length) return; const availableSlots = 999 - (studioMedia.customSceneImages?.length || 0); const filesToProcess = files.slice(0, availableSlots); const newB64s = []; for (let file of filesToProcess) { if (file.type.startsWith('image/')) { const b64 = await NetworkUtils.compressImage(file); newB64s.push(b64); } } const updatedImages = [...(studioMedia.customSceneImages || []), ...newB64s].slice(0, 5); for (let i = 0; i < updatedImages.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updatedImages[i]); setStudioMedia(s => ({ ...s, customSceneImages: updatedImages })); const newMediaFiles = newB64s.map((b64, i) => ({ name: `SabitGorsel_${Date.now()}_${i}.jpg`, type: 'image/jpeg', data: b64 })); if (newMediaFiles.length > 0) setUiState(prev => ({ ...prev, selectedMediaFiles: [...prev.selectedMediaFiles, ...newMediaFiles] })); e.target.value = null; };
     const handleCustomSceneImageDelete = async (idx) => { const updated = studioMedia.customSceneImages.filter((_, i) => i !== idx); for (let i = 0; i < 999; i++) await AssetManagerService.deleteMedia("CUSTOM_SCENE_IMG_" + i); for (let i = 0; i < updated.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updated[i]); setStudioMedia(s => ({ ...s, customSceneImages: updated })); };
-    const deleteMusic = async () => { try { const as = prefs.ambientSound; if (as && !['none', 'rain', 'wind', 'waves', 'fire'].includes(as)) { const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC'); if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl); await AssetManagerService.deleteMedia('CUSTOM_MUSIC'); if (!as.startsWith('local_')) { await AssetManagerService.removeMusicFromLib(as); const updatedList = studioMedia.musicList.filter(m => m.id !== as); await saveToFirestore({ bgmList: updatedList, selectedBgmId: null }); } setPrefs(p => ({ ...p, ambientSound: 'none' })); } } catch (e) { } };
+    const deleteMusic = async () => { try { const as = prefs.ambientSound; if (as && !['none', 'rain', 'wind', 'waves', 'fire'].includes(as)) { const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC'); if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl); await AssetManagerService.deleteMedia('CUSTOM_MUSIC'); if (!as.startsWith('local_')) { setCustomMusicList(list => list.filter(m => m.id !== as)); } setPrefs(p => ({ ...p, ambientSound: 'none' })); } } catch (e) { } };
     const handleFolderSelect = async () => {
         if (musicFileInputRef.current) musicFileInputRef.current.click();
     };
@@ -3732,23 +3704,23 @@ export default function App() {
         const audioExts = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma'];
         const audioFiles = files.filter(f => audioExts.some(ext => f.name.toLowerCase().endsWith(ext)));
         if (!audioFiles.length) { addSystemLog("Seçilen dosyalarda ses dosyası bulunamadı.", "warn"); return; }
-        addSystemLog(`${audioFiles.length} müzik dosyası bulundu, IndexedDB'ye kaydediliyor...`, 'info');
-        let savedCount = 0;
+        const added = [];
         for (const file of audioFiles) {
-            const id = "fm_" + file.name.replace(/[^a-zA-Z0-9]/g, '_') + "_" + file.size;
-            const existing = await AssetManagerService.getMusicFromLib(id);
-            if (existing) continue;
-            const b64 = await NetworkUtils.fileToBase64(file);
-            await AssetManagerService.saveMusicToLib({ id, name: file.name, data: b64 });
-            savedCount++;
+            const id = 'custom_' + file.name.replace(/[^a-zA-Z0-9]/g, '_') + '_' + file.size;
+            if (customMusicList.some(m => m.id === id)) continue;
+            const url = URL.createObjectURL(file);
+            const title = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+            added.push({ id, title, name: file.name, url, originalName: file.name });
         }
-        const allMusic = await AssetManagerService.getAllMusicFromLib();
-        setStudioMedia(s => ({ ...s, musicList: [...allMusic] }));
-        addSystemLog(`${savedCount} yeni müzik kaydedildi. Toplam: ${allMusic.length} müzik`, 'success');
+        if (added.length > 0) {
+            setCustomMusicList(list => [...list, ...added]);
+            addSystemLog(`${added.length} yeni müzik eklendi. Toplam: ${customMusicList.length + added.length} müzik`, 'success');
+        } else {
+            addSystemLog("Tüm seçilen müzikler zaten ekli.", 'info');
+        }
         e.target.value = null;
     };
     const clearSyncedFolder = async () => {
-        await AssetManagerService.removeDirHandle();
         setStudioMedia(s => ({ ...s, syncedFolderName: '' }));
         addSystemLog("Otomatik senkronizasyon kaldırıldı.", 'info');
     };
@@ -3766,18 +3738,18 @@ export default function App() {
 
     const handleFolderMusicSelect = async (musicId) => {
         if (prefs.ambientSound === musicId) { setPrefs(p => ({ ...p, ambientSound: 'none' })); return; }
-        // Yerel müzik (public/Muzik/) — doğrudan URL ile çal
-        const track = LOCAL_MUSIC_LIBRARY.find(m => m.id === musicId);
-        if (!track) { addSystemLog("Müzik bulunamadı (public/Muzik/)", 'error'); return; }
-        addSystemLog(`Müzik hazırlanıyor: ${track.title}`, 'info');
+        // Yerel müzik (public/Muzik/) veya kullanıcının eklediği müzik — doğrudan URL ile çal
+        const track = LOCAL_MUSIC_LIBRARY.find(m => m.id === musicId) || customMusicList.find(m => m.id === musicId);
+        if (!track) { addSystemLog("Müzik bulunamadı (public/Muzik/ veya eklenenler)", 'error'); return; }
+        addSystemLog(`Müzik hazırlanıyor: ${track.title || track.name}`, 'info');
         const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC');
         if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
         try {
-            if (!track.url) throw new Error('Müzik URL bulunamadı: ' + track.title);
+            if (!track.url) throw new Error('Müzik URL bulunamadı: ' + (track.title || track.name));
             await AssetManagerService.saveMedia('CUSTOM_MUSIC', track.url);
-            setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: track.title, customBgMusicId: musicId }));
+            setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: track.title || track.name, customBgMusicId: musicId }));
             playMusicPreview(track.url);
-            addSystemLog(`Müzik hazır: ${track.title}`, 'success');
+            addSystemLog(`Müzik hazır: ${track.title || track.name}`, 'success');
         } catch (e) {
             addSystemLog(`Müzik yükleme hatası: ${e.message}`, 'error');
         }
@@ -4215,7 +4187,7 @@ export default function App() {
                             <input ref={musicFileInputRef} type="file" webkitdirectory="true" directory="true" multiple accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.wma" className="hidden" onChange={handleFolderSelectLegacy} />
                         </div>
                     </div>
-                    {studioMedia.musicList.length > 0 && (
+                    {(LOCAL_MUSIC_LIBRARY.length > 0 || customMusicList.length > 0) && (
                         <div className="mt-2">
                             <input type="text" placeholder="Müzik ara..." value={musicSearchQuery} onChange={e => setMusicSearchQuery(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500 transition" />
                         </div>
@@ -4229,8 +4201,8 @@ export default function App() {
                             <button onClick={clearSyncedFolder} className="text-[10px] text-slate-400 hover:text-rose-400 transition">Kaldır</button>
                         </div>
                     )}
-                    {studioMedia.musicList.length === 0 && (
-                        <p className="text-[9px] text-slate-500 mt-1.5 text-center">Müzik klasörü seçin — tüm müzikler otomatik yüklenir</p>
+                    {(LOCAL_MUSIC_LIBRARY.length === 0 && customMusicList.length === 0) && (
+                        <p className="text-[9px] text-slate-500 mt-1.5 text-center">Müzik klasörü seçin — dosyalar otomatik eklenir</p>
                     )}
                 </div>
 
