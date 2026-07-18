@@ -1,88 +1,234 @@
+// ============================================================================
+// OTONOM — H1.151 (Gemini Canvas — super calisiyor-3 tabanlı, tam uyumlu)
+// Gemini AI Studio Canvas Uyumlu Versiyon
+// Değişiklikler: Instagram/TikTok safe zone — altyazı h*0.72, SAFE_ZONE sabiti, pozisyon düzeltmeleri
+// ============================================================================
+// Akış: S1 → M1 analiz → 2 AI görsel → S2 → M2 analiz → 2 AI görsel → ...
+// Sabit görsel sadece 1. sahneye atanır, medyayı anlatan 2 görsel AI üretir
+// Çoklu blokta süre sınırı yok — doğal okuma hızında bitir
+// Seslendirme daima %80, arka plan müzik daima %29
+//
+// === CHANGELOG ===
+// H1.151: Bug fix release — Türkçe karakterli fonksiyon adı düzeltildi (fetchGazeteMansetleri), renderSonSozScene yorumAudioEnd atama fix, Gazete crop modal clipPath browser uyumluluğu (4-div overlay), bgmInitialized scope fix
+// H1.150: Yorum+son söz birleşik render, ses bitişi garantili, boşluk fix korundu
+// H1.149: Yorum bitmeden kapanışa geçme fix — yorum varsa sadece yorum okunur, AI son söz yok; tek medyada başlık yok; sahneler arası boşluk eklendi
+// H1.148: Kelime bazlı zamanlama, sessizlik kırpma, fade 150ms, ses boşluğu 0.05sn
+// H1.147: trUpper() Türkçe karakter fix, thumbnail maks 5sn, son söz tekrar önleme
+// H1.146: Ekonomi enjeksiyonu kaldırıldı, validateTurkishText genişletildi
+// H1.145: Clickbait ses bekleme kaldırıldı, haber'de kaynaklar sahnesi kaldırıldı
+// H1.144: Clickbait kare fix (999→3), 4 bug fix (bgmInitialized, extractStatsHint, validateEconomyData, TDZ)
+// H1.143: Orijinal
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Download, RotateCcw, UploadCloud, Music, Trash2, Volume2, Clock, Loader2, Copy, AlertCircle, Activity, Server, Database, ShieldCheck, ImagePlus, Smartphone, Clapperboard, Type, Palette, Globe, MessageSquare, Monitor, Filter, Wand2, CloudRain, ChevronDown, Film, FileText, Layers, RefreshCw, Share2, Check, Link2, Newspaper, Scissors, ExternalLink, Eye } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
 
-// AI CLIENT Ã¢â‚¬â€ Fallback zinciri: NVIDIA (ÃƒÂ¼cretsiz) Ã¢â€ â€™ Gemini (ÃƒÂ¼cretsiz eski modeller)
-// TÃƒÂ¼m metin ÃƒÂ¼retimi ÃƒÂ¶nce NVIDIA'ya, baÃ…Å¸arÃ„Â±sÃ„Â±z olursa Gemini ÃƒÂ¼cretsiz
-// modellerine dÃƒÂ¼Ã…Å¸er. GÃƒÂ¶rsel/TTS iÃƒÂ§in ayrÃ„Â± uÃƒÂ§lar (generateImage/generateAudio) kullanÃ„Â±lÃ„Â±r.
+
+
+
+// ============================================================
+// MÜZİK PROXY AYARLARI
+// linkedin_server.py çalışırken bu URL'yi ngrok URL'nizle değiştirin
+// Örnek: 'https://xxxx.ngrok-free.dev/music/proxy'
+// Sunucu yoksa boş bırakın — doğrudan Google Drive denenir (CORS engeli olabilir)
+// ============================================================
+// Müzik proxy sunucu — otomatik algılama (localhost → ngrok → boş)
+// ============================================================
+// LİNKEDİN API SUNUCU AYARLARI
+// linkedin_server.py çalışırken otomatik algılama
+// ============================================================
+let _linkedInServerUrl = '';
+const getLinkedInServerUrl = async () => {
+    if (_linkedInServerUrl) return _linkedInServerUrl;
+    // 1. Localhost dene
+    try { const r = await fetch('http://localhost:3000/', { signal: AbortSignal.timeout(2000) }); if (r.ok) { _linkedInServerUrl = 'http://localhost:3000'; addSystemLog('LinkedIn sunucu bulundu: localhost:3000', 'success'); return _linkedInServerUrl; } } catch(e) {}
+    // 2. ngrok dene
+    try { const r = await fetch('https://impotence-powdery-replace.ngrok-free.dev/', { headers: { 'ngrok-skip-browser-warning': 'true' }, signal: AbortSignal.timeout(5000) }); if (r.ok) { _linkedInServerUrl = 'https://impotence-powdery-replace.ngrok-free.dev'; addSystemLog('LinkedIn sunucu bulundu: ngrok', 'success'); return _linkedInServerUrl; } } catch(e) {}
+    return '';
+};
+
+// LinkedIn API ile doğrudan paylaşım
+const shareToLinkedInAPI = async (text, imageBase64 = null, linkUrl = null, linkTitle = null, videoBase64 = null) => {
+    const baseUrl = await getLinkedInServerUrl();
+    if (!baseUrl) throw new Error('LinkedIn sunucu bulunamadı — linkedin_server.py çalışıyor mu?');
+    
+    const body = { commentary: text };
+    if (imageBase64) body.image_base64 = imageBase64;
+    if (linkUrl) body.link_url = linkUrl;
+    if (linkTitle) body.link_title = linkTitle;
+    if (videoBase64) body.video_base64 = videoBase64;
+    
+    let r;
+    if (videoBase64) {
+        // Video'yu parçalara böl ve ngrok üzerinden gönder (1MB limit çözümü)
+        const base64Data = videoBase64.includes(',') ? videoBase64.split(',')[1] : videoBase64;
+        const byteChars = atob(base64Data);
+        const byteArray = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+        const videoBlob = new Blob([byteArray], { type: 'video/mp4' });
+        const totalSize = videoBlob.size;
+        const chunkSize = 800 * 1024; // 800KB parçalar (ngrok 1MB altında)
+        const totalChunks = Math.ceil(totalSize / chunkSize);
+        const uploadId = 'vid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
+        
+        addSystemLog('Video parçalı yükleme: ' + (totalSize / 1024 / 1024).toFixed(1) + ' MB, ' + totalChunks + ' parça', 'info');
+        
+        // Parçaları sırayla gönder
+        for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize, totalSize);
+            const chunk = videoBlob.slice(start, end);
+            const formData = new FormData();
+            formData.append('upload_id', uploadId);
+            formData.append('chunk_index', i.toString());
+            formData.append('total_chunks', totalChunks.toString());
+            formData.append('chunk', chunk, 'chunk_' + i + '.bin');
+            
+            const cr = await fetch(`${baseUrl}/linkedin/upload-chunk`, {
+                method: 'POST',
+                body: formData
+            });
+            if (!cr.ok) {
+                const err = await cr.json().catch(() => ({}));
+                throw new Error('Chunk ' + (i+1) + ' yükleme hatası: ' + (err.detail || cr.status));
+            }
+            addSystemLog('Parça ' + (i+1) + '/' + totalChunks + ' yüklendi', 'info');
+        }
+        
+        // Birleştirilmiş videoyu LinkedIn'e yükle
+        addSystemLog('Video LinkedIn\'e yükleniyor...', 'info');
+        const shareForm = new FormData();
+        shareForm.append('upload_id', uploadId);
+        shareForm.append('commentary', text);
+        r = await fetch(`${baseUrl}/linkedin/share-chunked`, {
+            method: 'POST',
+            body: shareForm
+        });
+    } else {
+        r = await fetch(`${baseUrl}/linkedin/share`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+    }
+    
+    if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `LinkedIn API hatası: ${r.status}`);
+    }
+    return await r.json();
+};
+
+// Blob URL'yi base64'e çevir + boyut kontrolü
+const blobUrlToBase64 = async (blobUrl) => {
+    const response = await fetch(blobUrl);
+    const blob = await response.blob();
+    const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+    addSystemLog('Video dosya boyutu: ' + sizeMB + ' MB', 'info');
+    
+    // 100MB üzeri videoyu reddet
+    if (blob.size > 100 * 1024 * 1024) {
+        throw new Error('Video çok büyük (' + sizeMB + ' MB). LinkedIn limiti 100MB.');
+    }
+    
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+};
+
+// Wikimedia Commons'tan gerçek görsel çek (Atatürk vb. — Imagen üretemez)
+// Wikimedia CORS header verdiği için proxy'ye gerek yok, doğrudan fetch
+const fetchWikimediaImages = async (query, limit = 3) => {
+    try {
+        const searchUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=filetype:bitmap+${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${limit}&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=1280&format=json`;
+        const r = await fetch(searchUrl);
+        if (!r.ok) return [];
+        const data = await r.json();
+        const images = [];
+        const pages = data.query?.pages || {};
+        for (const page of Object.values(pages)) {
+            const ii = page.imageinfo?.[0];
+            if (ii?.mime?.startsWith('image/')) {
+                images.push(ii.thumburl || ii.url);
+            }
+        }
+        return images;
+    } catch (e) { return []; }
+};
+
+// Google Drive HTML sayfasından gerçek download URL'ini çıkar
+// ============================================================
+// AI CLIENT — Fallback zinciri: NVIDIA (ücretsiz) → Gemini (ücretsiz eski modeller)
+// Tüm metin üretimi önce NVIDIA'ya, başarısız olursa Gemini ücretsiz
+// modellerine düşer. Görsel/TTS için ayrı uçlar (generateImage/generateAudio) kullanılır.
 // ============================================================
 const NV_CHAT_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-// KullanÃ„Â±cÃ„Â± UI'dan model seÃƒÂ§ebilir; varsayÃ„Â±lan ÃƒÂ¼cretsiz nemotron.
+// Kullanıcı UI'dan model seçebilir; varsayılan ücretsiz nemotron.
 let NV_MODEL = 'nvidia/llama-3.1-nemotron-70b-instruct';
 const setNvidiaModel = (m) => { NV_MODEL = m; };
 
-// Gemini ÃƒÂ¼cretsiz eski modeller (fallback). apiKey boÃ…Å¸sa bu modeller de ÃƒÂ§alÃ„Â±Ã…Å¸maz,
-// ama kullanÃ„Â±cÃ„Â± Gemini key girerse devreye girer.
+// Gemini ücretsiz eski modeller (fallback). apiKey boşsa bu modeller de çalışmaz,
+// ama kullanıcı Gemini key girerse devreye girer.
 const GEMINI_FALLBACK_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest'];
 const GEMINI_CHAT_URL = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
+// Metni NVIDIA'dan üret
+const callNvidiaChat = async (systemPrompt, userPrompt, opts = {}) => {
+    const key = getApiKey();
+    if (!key) throw new Error('NVIDIA API anahtarı girilmemiş.');
+    const body = {
+        model: opts.model || NV_MODEL,
+        messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+        ],
+        temperature: opts.temperature != null ? opts.temperature : 0.7,
+        max_tokens: opts.max_tokens || 4096,
+        top_p: opts.top_p != null ? opts.top_p : 0.9,
+        stream: false
+    };
+
 // ============================================================
-// Ãƒâ€¡OKLU AI SAÃ„ÂLAYICI HAVUZU (OpenAI-uyumlu gateways)
-// ÃƒÅ“cretsiz LLM kaynaklarÃ„Â±: cheahjs/free-llm-api-resources, mnfst/awesome-free-llm-apis,
-// open-free-llm-api/awesome-freellm-apis ve benzeri repo'lardan derlendi.
-// KullanÃ„Â±cÃ„Â± UI'dan saÃ„Å¸layÃ„Â±cÃ„Â± + key girer (sessionStorage). Kodda hardcoded key yok.
-// SÃ„Â±ra: NVIDIA -> OpenAI-uyumlu gateways -> Gemini
+// ÇOKLU AI SAĞLAYICI HAVUZU (OpenAI-uyumlu gateways)
+// Sıra: NVIDIA -> OpenAI-uyumlu gateways -> Gemini
 // ============================================================
-// Her saÃ„Å¸layÃ„Â±cÃ„Â± iÃƒÂ§in ayrÃ„Â± sessionStorage anahtarÃ„Â±
 const PROVIDER_STORAGE = {
-  openrouter: 'ns_k_openrouter',
-  zenmux: 'ns_k_zenmux',
-  bluesminds: 'ns_k_bluesminds',
-  mimo: 'ns_k_mimo',
-  groq: 'ns_k_groq',
-  github: 'ns_k_github',
-  cerebras: 'ns_k_cerebras',
-  cohere: 'ns_k_cohere',
-  mistral: 'ns_k_mistral',
-  fireworks: 'ns_k_fireworks',
-  hyperbolic: 'ns_k_hyperbolic',
-  sambanova: 'ns_k_sambanova',
-  nebius: 'ns_k_nebius',
-  scaleway: 'ns_k_scaleway',
-  huggingface: 'ns_k_huggingface',
-  opencodezen: 'ns_k_opencodezen',
-  vercel: 'ns_k_vercel',
-  llm7: 'ns_k_llm7',
-  kluster: 'ns_k_kluster',
-  zhipu: 'ns_k_zhipu',
-  xai: 'ns_k_xai',
-  deepseek: 'ns_k_deepseek',
-  siliconflow: 'ns_k_siliconflow',
-  nscale: 'ns_k_nscale',
-  ovh: 'ns_k_ovh',
-  chutes: 'ns_k_chutes',
-  modelscope: 'ns_k_modelscope',
-  ai21: 'ns_k_ai21',
-  pollinations: 'ns_k_pollinations',
-  aion: 'ns_k_aion'
+  openrouter: 'ns_k_openrouter', zenmux: 'ns_k_zenmux', bluesminds: 'ns_k_bluesminds', mimo: 'ns_k_mimo',
+  groq: 'ns_k_groq', github: 'ns_k_github', cerebras: 'ns_k_cerebras', cohere: 'ns_k_cohere', mistral: 'ns_k_mistral',
+  fireworks: 'ns_k_fireworks', hyperbolic: 'ns_k_hyperbolic', sambanova: 'ns_k_sambanova', nebius: 'ns_k_nebius', scaleway: 'ns_k_scaleway',
+  huggingface: 'ns_k_huggingface', opencodezen: 'ns_k_opencodezen', vercel: 'ns_k_vercel', llm7: 'ns_k_llm7', kluster: 'ns_k_kluster',
+  zhipu: 'ns_k_zhipu', xai: 'ns_k_xai', deepseek: 'ns_k_deepseek', siliconflow: 'ns_k_siliconflow', nscale: 'ns_k_nscale',
+  ovh: 'ns_k_ovh', chutes: 'ns_k_chutes', modelscope: 'ns_k_modelscope', ai21: 'ns_k_ai21', pollinations: 'ns_k_pollinations', aion: 'ns_k_aion'
 };
 const getProviderKey = (id) => { try { return sessionStorage.getItem(PROVIDER_STORAGE[id] || '') || ''; } catch (e) { return ''; } };
 const setProviderKey = (id, k) => { try { const s = PROVIDER_STORAGE[id]; if (!s) return; if (k) sessionStorage.setItem(s, k); else sessionStorage.removeItem(s); } catch (e) {} };
 
-// OpenAI-uyumlu saÃ„Å¸layÃ„Â±cÃ„Â± tanÃ„Â±mlarÃ„Â± (ÃƒÂ¼cretsiz LLM kaynaklarÃ„Â±ndan)
 const AI_PROVIDERS = [
-  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', models: ['openai/gpt-4o-mini', 'nvidia/nemotron-3-super-120b-a12b:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-flash-1.5', 'qwen/qwen3-coder:free'], isJsonOk: true },
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', models: ['openai/gpt-4o-mini', 'nvidia/nemotron-3-super-120b-a12b:free', 'meta-llama/llama-3.3-70b-instruct:free'], isJsonOk: true },
   { id: 'zenmux', label: 'ZenMUX.ai', baseUrl: 'https://ai.zenmux.io/v1/chat/completions', models: ['gpt-4o-mini', 'claude-3.5-haiku', 'gemini-1.5-flash'], isJsonOk: true },
   { id: 'bluesminds', label: 'BluesMinds', baseUrl: 'https://api.bluesminds.com/v1/chat/completions', models: ['gpt-4o-mini', 'llama-3.1-70b', 'nemotron-70b'], isJsonOk: true },
   { id: 'mimo', label: 'Mimo', baseUrl: 'https://api.mimo.example/v1/chat/completions', models: ['gpt-4o-mini'], isJsonOk: true },
-  { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'gemma2-9b-it'], isJsonOk: true },
-  { id: 'github', label: 'GitHub Models', baseUrl: 'https://models.inference.ai.azure.com/chat/completions', models: ['gpt-4o', 'gpt-4o-mini', 'Phi-4', 'DeepSeek-R1', 'Llama-3.3-70B-Instruct'], isJsonOk: false },
+  { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'gemma2-9b-it'], isJsonOk: true },
+  { id: 'github', label: 'GitHub Models', baseUrl: 'https://models.inference.ai.azure.com/chat/completions', models: ['gpt-4o', 'gpt-4o-mini', 'Phi-4', 'DeepSeek-R1'], isJsonOk: false },
   { id: 'cerebras', label: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1/chat/completions', models: ['llama-3.3-70b', 'gpt-oss-120b', 'llama3.1-8b'], isJsonOk: true },
   { id: 'cohere', label: 'Cohere', baseUrl: 'https://api.cohere.com/compatibility/v1/chat/completions', models: ['command-r-plus', 'command-r7b-12-2024', 'c4ai-aya-expanse-32b'], isJsonOk: true },
   { id: 'mistral', label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1/chat/completions', models: ['mistral-small-latest', 'open-mistral-7b', 'ministral-3b-latest'], isJsonOk: true },
-  { id: 'fireworks', label: 'Fireworks', baseUrl: 'https://api.fireworks.ai/inference/v1/chat/completions', models: ['accounts/fireworks/models/llama-v3p3-70b-instruct', 'accounts/fireworks/models/deepseek-r1'], isJsonOk: true },
+  { id: 'fireworks', label: 'Fireworks', baseUrl: 'https://api.fireworks.ai/inference/v1/chat/completions', models: ['accounts/fireworks/models/llama-v3p3-70b-instruct', 'deepseek-r1'], isJsonOk: true },
   { id: 'hyperbolic', label: 'Hyperbolic', baseUrl: 'https://api.hyperbolic.xyz/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'], isJsonOk: true },
   { id: 'sambanova', label: 'SambaNova', baseUrl: 'https://api.sambanova.ai/v1/chat/completions', models: ['Meta-Llama-3.3-70B-Instruct', 'DeepSeek-V3-0324', 'Qwen3-235B-A22B'], isJsonOk: true },
   { id: 'nebius', label: 'Nebius', baseUrl: 'https://api.nebius.ai/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'], isJsonOk: true },
   { id: 'scaleway', label: 'Scaleway', baseUrl: 'https://api.scaleway.ai/v1/chat/completions', models: ['meta/llama-3.3-70b-instruct', 'qwen3-235b-a22b-instruct-2507', 'deepseek-v3.2'], isJsonOk: true },
   { id: 'huggingface', label: 'HuggingFace', baseUrl: 'https://router.huggingface.co/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen3-235B-A22B', 'deepseek-ai/DeepSeek-V3-0324'], isJsonOk: true },
-  { id: 'opencodezen', label: 'OpenCode Zen', baseUrl: 'https://api.opencode.ai/v1/chat/completions', models: ['nemotron-3-super-free', 'deepseek-v4-flash-free', 'big-pickle-stealth'], isJsonOk: true },
+  { id: 'opencodezen', label: 'OpenCode Zen', baseUrl: 'https://api.opencode.ai/v1/chat/completions', models: ['nemotron-3-super-free', 'deepseek-v4-flash-free'], isJsonOk: true },
   { id: 'vercel', label: 'Vercel AI GW', baseUrl: 'https://ai-gateway.vercel.sh/v1/chat/completions', models: ['gpt-4o-mini', 'meta/llama-3.3-70b-instruct', 'google/gemini-2.0-flash'], isJsonOk: true },
   { id: 'llm7', label: 'LLM7.io', baseUrl: 'https://api.llm7.io/v1/chat/completions', models: ['gpt-4o-mini', 'deepseek-r1', 'qwen2.5-coder-32b', 'llama-3.3-70b'], isJsonOk: true },
   { id: 'kluster', label: 'Kluster AI', baseUrl: 'https://api.kluster.ai/v1/chat/completions', models: ['deepseek-r1', 'llama-4-maverick', 'qwen3-235b'], isJsonOk: true },
-  { id: 'zhipu', label: 'Zhipu AI (GLM)', baseUrl: 'https://open.bigmodel.cn/api/paite/v4/chat/completions', models: ['glm-4.7-flash', 'glm-4.5-flash', 'glm-4.6v-flash'], isJsonOk: true },
+  { id: 'zhipu', label: 'Zhipu AI (GLM)', baseUrl: 'https://open.bigmodel.cn/api/paite/v4/chat/completions', models: ['glm-4.7-flash', 'glm-4.5-flash'], isJsonOk: true },
   { id: 'xai', label: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1/chat/completions', models: ['grok-3-mini', 'grok-2', 'grok-beta'], isJsonOk: true },
   { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1/chat/completions', models: ['deepseek-chat', 'deepseek-reasoner'], isJsonOk: true },
   { id: 'siliconflow', label: 'SiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1/chat/completions', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B', 'meta-llama/Llama-3.3-70B-Instruct'], isJsonOk: true },
@@ -96,24 +242,14 @@ const AI_PROVIDERS = [
 ];
 const getProviderById = (id) => AI_PROVIDERS.find(p => p.id === id);
 
-// TÃƒÂ¼m OpenAI-uyumlu saÃ„Å¸layÃ„Â±cÃ„Â±lar iÃƒÂ§in ortak ÃƒÂ§aÃ„Å¸rÃ„Â±
 const callOpenAICompatible = async (provider, systemPrompt, userPrompt, opts = {}) => {
     const key = getProviderKey(provider.id);
-    if (!key) throw new Error(provider.label + ' anahtarÃ„Â± girilmemiÃ…Å¸.');
+    if (!key) throw new Error(provider.label + ' anahtari girilmemis.');
     const models = opts.model ? [opts.model] : provider.models;
     let lastErr = '';
     for (const model of models) {
         try {
-            const body = {
-                model,
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
-                ],
-                temperature: opts.temperature != null ? opts.temperature : 0.7,
-                max_tokens: opts.max_tokens || 4096,
-                stream: false
-            };
+            const body = { model, messages: [ { role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt } ], temperature: opts.temperature != null ? opts.temperature : 0.7, max_tokens: opts.max_tokens || 4096, stream: false };
             if (opts.json && provider.isJsonOk) body.response_format = { type: 'json_object' };
             const headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
             if (provider.id === 'openrouter') headers['HTTP-Referer'] = window.location.origin || 'https://example.com';
@@ -121,29 +257,13 @@ const callOpenAICompatible = async (provider, systemPrompt, userPrompt, opts = {
             if (!r.ok) { lastErr = provider.label + ' (' + model + ') ' + r.status; continue; }
             const data = await r.json();
             const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
-            if (!content) { lastErr = provider.label + ' boÃ…Å¸ yanÃ„Â±t'; continue; }
+            if (!content) { lastErr = provider.label + ' bos yanit'; continue; }
             return _parseAIContent(content, opts.json);
         } catch (e) { lastErr = provider.label + ': ' + e.message; }
     }
-    throw new Error(lastErr || provider.label + ' baÃ…Å¸arÃ„Â±sÃ„Â±z.');
+    throw new Error(lastErr || provider.label + ' basarisiz.');
 };
 
-
-// Metni NVIDIA'dan ÃƒÂ¼ret
-const callNvidiaChat = async (systemPrompt, userPrompt, opts = {}) => {
-    const key = getApiKey();
-    if (!key) throw new Error('NVIDIA API anahtarÃ„Â± girilmemiÃ…Å¸.');
-    const body = {
-        model: opts.model || NV_MODEL,
-        messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-        ],
-        temperature: opts.temperature != null ? opts.temperature : 0.7,
-        max_tokens: opts.max_tokens || 4096,
-        top_p: opts.top_p != null ? opts.top_p : 0.9,
-        stream: false
-    };
     if (opts.json) body.response_format = { type: 'json_object' };
     const r = await fetch(NV_CHAT_URL, {
         method: 'POST',
@@ -152,17 +272,17 @@ const callNvidiaChat = async (systemPrompt, userPrompt, opts = {}) => {
     });
     if (!r.ok) {
         const errText = await r.text().catch(() => '');
-        throw new Error(`NVIDIA API hatasÃ„Â± (${r.status}): ${errText.substring(0, 150)}`);
+        throw new Error(`NVIDIA API hatası (${r.status}): ${errText.substring(0, 150)}`);
     }
     const data = await r.json();
     const content = data.choices?.[0]?.message?.content || '';
     return _parseAIContent(content, opts.json);
 };
 
-// Metni Gemini'den ÃƒÂ¼ret (fallback) Ã¢â‚¬â€ ayrÃ„Â± Gemini key kullanÃ„Â±r
+// Metni Gemini'den üret (fallback) — ayrı Gemini key kullanır
 const callGeminiChat = async (systemPrompt, userPrompt, opts = {}) => {
     const key = getGeminiKey();
-    if (!key) throw new Error('Gemini API anahtarÃ„Â± girilmemiÃ…Å¸.');
+    if (!key) throw new Error('Gemini API anahtarı girilmemiş.');
     const payload = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -177,9 +297,9 @@ const callGeminiChat = async (systemPrompt, userPrompt, opts = {}) => {
             const data = await r.json();
             const content = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
             if (content) return _parseAIContent(content, opts.json);
-        } catch (e) { /* sonraki modele geÃƒÂ§ */ }
+        } catch (e) { /* sonraki modele geç */ }
     }
-    throw new Error('Gemini fallback modelleri baÃ…Å¸arÃ„Â±sÃ„Â±z.');
+    throw new Error('Gemini fallback modelleri başarısız.');
 };
 
 // Ortak JSON temizleyici
@@ -192,41 +312,32 @@ const _parseAIContent = (content, isJson) => {
         if (s !== -1 && e !== -1) cleaned = cleaned.substring(s, e + 1);
         return JSON.parse(cleaned);
     } catch (e) {
-        addSystemLog('AI JSON parse hatasÃ„Â±, ham metin dÃƒÂ¶ndÃƒÂ¼rÃƒÂ¼lÃƒÂ¼yor.', 'warn');
+        addSystemLog('AI JSON parse hatası, ham metin döndürülüyor.', 'warn');
         return content;
     }
 };
 
-// ANA FALLBACK ZÃ„Â°NCÃ„Â°RÃ„Â°: NVIDIA -> OpenAI-uyumlu saÃ„Å¸layÃ„Â±cÃ„Â±lar -> Gemini
-// Herhangi biri baÃ…Å¸arÃ„Â±lÃ„Â± olursa dÃƒÂ¶ner; hepsi baÃ…Å¸arÃ„Â±sÃ„Â±zsa hata verir.
+// ANA FALLBACK ZİNCİRİ: önce NVIDIA, sonra Gemini ücretsiz modelleri.
+// NVIDIA key yoksa direkt Gemini'ye geçilir; Gemini key de yoksa hata verilir.
 const callAI = async (systemPrompt, userPrompt, opts = {}) => {
     const errors = [];
     if (getApiKey()) {
-        try {
-            const res = await callNvidiaChat(systemPrompt, userPrompt, opts);
-            addSystemLog('Metin NVIDIA ile ÃƒÂ¼retildi.', 'success');
-            return res;
-        } catch (e) { errors.push('NVIDIA: ' + e.message); addSystemLog('NVIDIA baÃ…Å¸arÃ„Â±sÃ„Â±z: ' + e.message, 'warn'); }
+        try { const res = await callNvidiaChat(systemPrompt, userPrompt, opts); addSystemLog('Metin NVIDIA ile uretildi.', 'success'); return res; }
+        catch (e) { errors.push('NVIDIA: ' + e.message); addSystemLog('NVIDIA basarisiz: ' + e.message, 'warn'); }
     }
     for (const provider of AI_PROVIDERS) {
         if (!getProviderKey(provider.id)) continue;
-        try {
-            const res = await callOpenAICompatible(provider, systemPrompt, userPrompt, opts);
-            addSystemLog('Metin ' + provider.label + ' ile ÃƒÂ¼retildi.', 'success');
-            return res;
-        } catch (e) { errors.push(provider.label + ': ' + e.message); addSystemLog(provider.label + ' baÃ…Å¸arÃ„Â±sÃ„Â±z: ' + e.message, 'warn'); }
+        try { const res = await callOpenAICompatible(provider, systemPrompt, userPrompt, opts); addSystemLog('Metin ' + provider.label + ' ile uretildi.', 'success'); return res; }
+        catch (e) { errors.push(provider.label + ': ' + e.message); addSystemLog(provider.label + ' basarisiz: ' + e.message, 'warn'); }
     }
     if (getGeminiKey()) {
-        try {
-            const res = await callGeminiChat(systemPrompt, userPrompt, opts);
-            addSystemLog('Metin Gemini fallback ile ÃƒÂ¼retildi.', 'success');
-            return res;
-        } catch (e) { errors.push('Gemini: ' + e.message); addSystemLog('Gemini baÃ…Å¸arÃ„Â±sÃ„Â±z: ' + e.message, 'warn'); }
+        try { const res = await callGeminiChat(systemPrompt, userPrompt, opts); addSystemLog('Metin Gemini fallback ile uretildi.', 'success'); return res; }
+        catch (e) { errors.push('Gemini: ' + e.message); addSystemLog('Gemini basarisiz: ' + e.message, 'warn'); }
     }
-    throw new Error('TÃƒÂ¼m AI saÃ„Å¸layÃ„Â±cÃ„Â±larÃ„Â± baÃ…Å¸arÃ„Â±sÃ„Â±z:\n' + errors.join('\n'));
+    throw new Error('Tum AI saglayicilari basarisiz:\n' + errors.join('\n'));
 };
 
-// Yerel mÃƒÂ¼zik kÃƒÂ¼tÃƒÂ¼phanesinden id/url ile ÃƒÂ§ÃƒÂ¶zÃƒÂ¼m (GDrive kaldÃ„Â±rÃ„Â±ldÃ„Â± H1.152)
+
 const fetchWithCorsProxy = async (url) => {
     if (url && (url.startsWith('/Muzik/') || url.startsWith('blob:') || url.startsWith('data:'))) {
         try { const r = await fetch(url); if (r.ok) return r; } catch(e) {}
@@ -236,11 +347,11 @@ const fetchWithCorsProxy = async (url) => {
         const localUrl = (typeof getMusicUrlById === 'function') ? (getMusicUrlById(url) || getMusicUrlById('local_' + idMatch[1])) : null;
         if (localUrl) { try { const r = await fetch(localUrl); if (r.ok) return r; } catch(e) {} }
     }
-    throw new Error('MÃƒÂ¼zik bulunamadÃ„Â±. public/Muzik/ klasÃƒÂ¶rÃƒÂ¼nÃƒÂ¼ kontrol edin.');
+    throw new Error('Muzik bulunamadi. public/Muzik/ klasorunu kontrol edin.');
 };
 
-// API anahtarÃ„Â± artÃ„Â±k UI'dan girilir (sessionStorage). Kodda hardcoded deÃ„Å¸il.
-// NVIDIA ve Gemini ayrÃ„Â± anahtarlarla ÃƒÂ§alÃ„Â±Ã…Å¸Ã„Â±r (farklÃ„Â± formatlarda).
+// API anahtarı artık UI'dan girilir (sessionStorage). Kodda hardcoded değil.
+// NVIDIA ve Gemini ayrı anahtarlarla çalışır (farklı formatlarda).
 const NV_API_KEY_STORAGE = 'ns_nvidiaKey';
 const GEMINI_API_KEY_STORAGE = 'ns_geminiKey';
 const getApiKey = () => {
@@ -256,8 +367,17 @@ const setGeminiKey = (k) => {
     try { if (k) sessionStorage.setItem(GEMINI_API_KEY_STORAGE, k); else sessionStorage.removeItem(GEMINI_API_KEY_STORAGE); } catch (e) {}
 };
 
-// ============================================================
-// YEREL MÃƒÅ“ZÃ„Â°K KÃƒÅ“TÃƒÅ“PHANESÃ„Â° (GDrive kaldÃ„Â±rÃ„Â±ldÃ„Â± H1.152)
+// YEREL MÜZİK KÜTÜPHANESİ (GDrive kaldırıldı)
+const musicModules = import.meta.glob('/Muzik/*.{mp3,m4a,mp4,wav,ogg,flac,aac}');
+const LOCAL_MUSIC_LIBRARY = Object.keys(musicModules).map((path, i) => {
+  const name = path.split('/').pop();
+  let title = name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+  return { id: 'local_' + i, title, path, url: path, originalName: name };
+});
+const getMusicUrlById = (id) => { const item = LOCAL_MUSIC_LIBRARY.find(m => m.id === id); return item ? item.url : null; };
+const getMusicProxyUrl = async () => '';
+
+
 const SafeStorage = {
     memoryStore: {},
     getItem: (key) => { try { return localStorage.getItem(key); } catch (e) { return SafeStorage.memoryStore[key] || null; } },
@@ -301,7 +421,7 @@ window.addSystemLog = addSystemLog;
 
 const exportWorkflowLog = (jobState) => {
     const lines = ['=== AI News Studio Workflow Log ===', `Tarih: ${new Date().toLocaleString('tr-TR')}`, `Versiyon: v1.0`, ''];
-    lines.push('--- Sistem LoglarÃ„Â± ---');
+    lines.push('--- Sistem Logları ---');
     for (const e of _logBuffer) lines.push(`[${e.timestamp}] [${e.type.toUpperCase()}] ${e.text}`);
     lines.push('');
     lines.push('--- Workflow State ---');
@@ -340,7 +460,7 @@ const initFirebase = () => {
     try {
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         if (Object.keys(firebaseConfig).length > 0) { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; return true; }
-    } catch (e) { console.warn("[INFRA] Firebase baÃ…Å¸latÃ„Â±lamadÃ„Â±, izole modda ÃƒÂ§alÃ„Â±Ã…Å¸Ã„Â±lÃ„Â±yor."); }
+    } catch (e) { console.warn("[INFRA] Firebase başlatılamadı, izole modda çalışılıyor."); }
     return false;
 };
 const isFirebaseActive = initFirebase();
@@ -348,13 +468,13 @@ const isFirebaseActive = initFirebase();
 const attemptSilentReauth = async () => {
     try {
         if (auth) {
-            addSystemLog("Yetkilendirme anahtarÃ„Â± yenileniyor (Silent Re-Auth)...", "warn");
+            addSystemLog("Yetkilendirme anahtarı yenileniyor (Silent Re-Auth)...", "warn");
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) await signInWithCustomToken(auth, __initial_auth_token);
             else await signInAnonymously(auth);
-            addSystemLog("Oturum anahtarÃ„Â± arka planda baÃ…Å¸arÃ„Â±yla tazelendi!", "success");
+            addSystemLog("Oturum anahtarı arka planda başarıyla tazelendi!", "success");
             return true;
         }
-    } catch (e) { addSystemLog("Sessiz re-auth denemesi baÃ…Å¸arÃ„Â±sÃ„Â±z oldu: " + e.message, "error"); }
+    } catch (e) { addSystemLog("Sessiz re-auth denemesi başarısız oldu: " + e.message, "error"); }
     return false;
 };
 
@@ -367,24 +487,24 @@ const NetworkUtils = {
                 if (res.ok) return res;
                 if (res.status === 400 || res.status === 403 || res.status === 404) throw new Error(`HTTP_FAIL_${res.status}`);
                 if (res.status === 401) {
-                    addSystemLog(`Oturum hatasÃ„Â± (401) algÃ„Â±landÃ„Â±, sessiz yenileme deneniyor...`, "warn");
+                    addSystemLog(`Oturum hatası (401) algılandı, sessiz yenileme deneniyor...`, "warn");
                     const success = await attemptSilentReauth();
-                    if (success) { addSystemLog(`Sessiz kimlik doÃ„Å¸rulama tazelendi, istek yeniden deneniyor.`, "success"); continue; }
-                    if (i === retries - 1) { sysEventBus.emit('AUTH_EXPIRED', true); throw new Error("Oturum sÃƒÂ¼resi doldu (401)."); }
+                    if (success) { addSystemLog(`Sessiz kimlik doğrulama tazelendi, istek yeniden deneniyor.`, "success"); continue; }
+                    if (i === retries - 1) { sysEventBus.emit('AUTH_EXPIRED', true); throw new Error("Oturum süresi doldu (401)."); }
                     await new Promise(r => setTimeout(r, delays[i])); continue;
                 }
-                if (res.status === 429 || res.status >= 500) { addSystemLog(`YavaÃ…Å¸lÃ„Â±k (HTTP ${res.status}). Yeniden deneme (${i + 1}/${retries}) - ${delays[i] / 1000}sn...`, "warn"); await new Promise(r => setTimeout(r, delays[i])); continue; }
+                if (res.status === 429 || res.status >= 500) { addSystemLog(`Yavaşlık (HTTP ${res.status}). Yeniden deneme (${i + 1}/${retries}) - ${delays[i] / 1000}sn...`, "warn"); await new Promise(r => setTimeout(r, delays[i])); continue; }
                 throw new Error(`HTTP Error ${res.status}`);
             } catch (err) {
-                if (err.message.startsWith('HTTP_FAIL_') || err.message.includes('Oturum sÃƒÂ¼resi doldu')) throw err;
+                if (err.message.startsWith('HTTP_FAIL_') || err.message.includes('Oturum süresi doldu')) throw err;
                 if (i === retries - 1) throw err;
-                addSystemLog(`BaÃ„Å¸lantÃ„Â± kesintisi. Yeniden deneniyor (${i + 1}/${retries}) - ${delays[i] / 1000}sn...`, "warn");
+                addSystemLog(`Bağlantı kesintisi. Yeniden deneniyor (${i + 1}/${retries}) - ${delays[i] / 1000}sn...`, "warn");
                 await new Promise(r => setTimeout(r, delays[i]));
             }
         }
-        throw new Error('fetchWithRetry: tÃƒÂ¼m denemeler baÃ…Å¸arÃ„Â±sÃ„Â±z');
+        throw new Error('fetchWithRetry: tüm denemeler başarısız');
     },
-    loadImage: (src) => new Promise((resolve) => { if (!src) return resolve(null); if (typeof src !== 'string') { console.warn('loadImage: src string deÃ„Å¸il', typeof src); return resolve(null); } const img = new Image(); if (src.startsWith('http')) img.crossOrigin = "Anonymous"; img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = src; }),
+    loadImage: (src) => new Promise((resolve) => { if (!src) return resolve(null); if (typeof src !== 'string') { console.warn('loadImage: src string değil', typeof src); return resolve(null); } const img = new Image(); if (src.startsWith('http')) img.crossOrigin = "Anonymous"; img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = src; }),
     fileToBase64: (file) => new Promise((resolve) => { const reader = new FileReader(); reader.onload = (e) => resolve(e.target.result); reader.readAsDataURL(file); }),
     compressImage: (file) => new Promise((resolve) => {
         if (!file.type.startsWith('image/')) { const reader = new FileReader(); reader.onload = (e) => resolve(e.target.result); reader.readAsDataURL(file); return; }
@@ -434,7 +554,7 @@ class AssetManagerService {
     static async saveDirHandle(handle) { try { const db = await this.getDB(); const tx = db.transaction(DIR_STORE, 'readwrite'); tx.objectStore(DIR_STORE).put({ id: 'musicDir', handle, name: handle.name, lastSync: Date.now() }); return new Promise(r => tx.oncomplete = () => r(true)); } catch (e) { return false; } }
     static async getDirHandle() { try { const db = await this.getDB(); const tx = db.transaction(DIR_STORE, 'readonly'); const req = tx.objectStore(DIR_STORE).get('musicDir'); return new Promise(r => req.onsuccess = () => r(req.result || null)); } catch (e) { return null; } }
     static async removeDirHandle() { try { const db = await this.getDB(); const tx = db.transaction(DIR_STORE, 'readwrite'); tx.objectStore(DIR_STORE).delete('musicDir'); return new Promise(r => tx.oncomplete = () => r(true)); } catch (e) { return false; } }
-    // Ã„Â°ndirilenler klasÃƒÂ¶rÃƒÂ¼ iÃƒÂ§in directory handle
+    // İndirilenler klasörü için directory handle
     static async saveDownloadsDirHandle(handle) { try { const db = await this.getDB(); const tx = db.transaction(DIR_STORE, 'readwrite'); tx.objectStore(DIR_STORE).put({ id: 'downloadsDir', handle, name: handle.name, timestamp: Date.now() }); return new Promise(r => tx.oncomplete = () => r(true)); } catch (e) { return false; } }
     static async getDownloadsDirHandle() { try { const db = await this.getDB(); const tx = db.transaction(DIR_STORE, 'readonly'); const req = tx.objectStore(DIR_STORE).get('downloadsDir'); return new Promise(r => req.onsuccess = () => r(req.result || null)); } catch (e) { return null; } }
 }
@@ -460,33 +580,33 @@ const syncMusicFromDir = async (dirHandle, existingMusic) => {
             tx.objectStore(DIR_STORE).put({ id: 'musicDir', handle: dirHandle, name: dirHandle.name, lastSync: Date.now() });
         }
     } catch (e) {
-        console.warn("Otomatik senkronizasyon hatasÃ„Â±:", e);
+        console.warn("Otomatik senkronizasyon hatası:", e);
     }
     return newCount;
 };
 
 const analyzeQuoteEmotion = (text) => {
     const lower = text.toLowerCase();
-    const mutluKelimeler = ['mutlu', 'sevinÃƒÂ§', 'neÃ…Å¸e', 'gÃƒÂ¼le', 'eÃ„Å¸len', 'coÃ…Å¸ku', 'baÃ…Å¸arÃ„Â±', 'zafer', 'kazan', 'umut', 'gÃƒÂ¼neÃ…Å¸', 'aydÃ„Â±nlÃ„Â±k', 'gÃƒÂ¼zel', 'sevgi', 'aÃ…Å¸k', 'sev', 'tatlÃ„Â±', 'tat', 'bal', 'ÃƒÂ§iÃƒÂ§ek', 'bahar', 'yaz', 'dÃƒÂ¼nya', 'yaÃ…Å¸am', 'hayat'];
-    const hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Kelimeler = ['hÃƒÂ¼zÃƒÂ¼n', 'ÃƒÂ¼zgÃƒÂ¼n', 'aÃ„Å¸la', 'gÃƒÂ¶z yaÃ…Å¸', 'keder', 'acÃ„Â±', 'kayÃ„Â±p', 'ÃƒÂ¶lÃƒÂ¼m', 'ayrÃ„Â±lÃ„Â±k', 'yalnÃ„Â±z', 'yalnÃ„Â±zlÃ„Â±k', 'karanlÃ„Â±k', 'gece', 'son', 'bitiÃ…Å¸', 'veda', 'gÃƒÂ¶ÃƒÂ§', 'hÃ„Â±ÃƒÂ§kÃ„Â±rÃ„Â±k', 'fÃ„Â±rtÃ„Â±na', 'yaÃ„Å¸mur', 'kÃ„Â±Ã…Å¸', 'soÃ„Å¸uk', 'don', 'gÃƒÂ¶z yaÃ…Å¸'];
-    const romantikKelimeler = ['aÃ…Å¸k', 'sevda', 'sevgili', 'kalp', 'gÃƒÂ¶nÃƒÂ¼l', 'dudak', 'ÃƒÂ¶p', 'sarÃ„Â±', 'kokla', 'tatlÃ„Â±', 'bal', 'gÃƒÂ¼l', 'ay', 'yÃ„Â±ldÃ„Â±z', 'gece', 'rk', 'dÃƒÂ¼Ã…Å¸', 'rÃƒÂ¼ya', 'ÃƒÂ¶zlem', 'bekle', 'hasret', 'vuslat', 'buluÃ…Å¸'];
-    let mutluSkor = 0, hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Skor = 0, romantikSkor = 0;
+    const mutluKelimeler = ['mutlu', 'sevinç', 'neşe', 'güle', 'eğlen', 'coşku', 'başarı', 'zafer', 'kazan', 'umut', 'güneş', 'aydınlık', 'güzel', 'sevgi', 'aşk', 'sev', 'tatlı', 'tat', 'bal', 'çiçek', 'bahar', 'yaz', 'dünya', 'yaşam', 'hayat'];
+    const hüzünlüKelimeler = ['hüzün', 'üzgün', 'ağla', 'göz yaş', 'keder', 'acı', 'kayıp', 'ölüm', 'ayrılık', 'yalnız', 'yalnızlık', 'karanlık', 'gece', 'son', 'bitiş', 'veda', 'göç', 'hıçkırık', 'fırtına', 'yağmur', 'kış', 'soğuk', 'don', 'göz yaş'];
+    const romantikKelimeler = ['aşk', 'sevda', 'sevgili', 'kalp', 'gönül', 'dudak', 'öp', 'sarı', 'kokla', 'tatlı', 'bal', 'gül', 'ay', 'yıldız', 'gece', 'rk', 'düş', 'rüya', 'özlem', 'bekle', 'hasret', 'vuslat', 'buluş'];
+    let mutluSkor = 0, hüzünlüSkor = 0, romantikSkor = 0;
     mutluKelimeler.forEach(k => { if (lower.includes(k)) mutluSkor++; });
-    hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Kelimeler.forEach(k => { if (lower.includes(k)) hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Skor++; });
+    hüzünlüKelimeler.forEach(k => { if (lower.includes(k)) hüzünlüSkor++; });
     romantikKelimeler.forEach(k => { if (lower.includes(k)) romantikSkor++; });
-    const maxSkor = Math.max(mutluSkor, hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Skor, romantikSkor);
+    const maxSkor = Math.max(mutluSkor, hüzünlüSkor, romantikSkor);
     if (maxSkor === 0) return 'notr';
     if (mutluSkor === maxSkor) return 'mutlu';
-    if (hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼Skor === maxSkor) return 'hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼';
+    if (hüzünlüSkor === maxSkor) return 'hüzünlü';
     return 'romantik';
 };
 
 const matchMusicToEmotion = (emotion, musicList) => {
     if (!musicList || musicList.length === 0) return null;
     const emotionKeywords = {
-        'mutlu': ['happy', 'upbeat', 'energetic', 'pop', 'joy', 'dance', 'fun', 'bright', 'major', 'optimistic', 'mutlu', 'neÃ…Å¸eli', 'coÃ…Å¸kulu', 'eÃ„Å¸lence'],
-        'hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼': ['sad', 'melancholy', 'emotional', 'piano', 'strings', 'slow', 'deep', 'minor', 'cry', 'sorrow', 'hÃƒÂ¼zÃƒÂ¼n', 'ÃƒÂ¼zÃƒÂ¼ntÃƒÂ¼', 'agir', 'yavas', 'duygusal'],
-        'romantik': ['romantic', 'love', 'soft', 'gentle', 'dream', 'ambient', 'chill', 'relax', 'calm', 'aÃ…Å¸k', 'sevgi', 'roma', 'duygusal', 'yavas'],
+        'mutlu': ['happy', 'upbeat', 'energetic', 'pop', 'joy', 'dance', 'fun', 'bright', 'major', 'optimistic', 'mutlu', 'neşeli', 'coşkulu', 'eğlence'],
+        'hüzünlü': ['sad', 'melancholy', 'emotional', 'piano', 'strings', 'slow', 'deep', 'minor', 'cry', 'sorrow', 'hüzün', 'üzüntü', 'agir', 'yavas', 'duygusal'],
+        'romantik': ['romantic', 'love', 'soft', 'gentle', 'dream', 'ambient', 'chill', 'relax', 'calm', 'aşk', 'sevgi', 'roma', 'duygusal', 'yavas'],
         'notr': ['background', 'ambient', 'chill', 'lofi', 'calm', 'soft', 'neutral', 'minimal']
     };
     const keywords = emotionKeywords[emotion] || emotionKeywords['notr'];
@@ -582,13 +702,13 @@ class LogicEngineService {
     }
 
     static async analyzeContent(inputData, inputType, config) {
-        addSystemLog('Ã„Â°ÃƒÂ§erik analiz ediliyor (NVIDIA)...', 'info');
-        // NVIDIA chat API'si gÃƒÂ¶rsel girdiyi desteklemez; media/url giriÃ…Å¸leri metin-prompt'a dÃƒÂ¼Ã…Å¸ÃƒÂ¼rÃƒÂ¼lÃƒÂ¼r.
+        addSystemLog('İçerik analiz ediliyor (NVIDIA)...', 'info');
+        // NVIDIA chat API'si görsel girdiyi desteklemez; media/url girişleri metin-prompt'a düşürülür.
         if (!(inputType === 'prompt' || inputType === 'text' || inputType === 'url' || inputType === 'topic')) {
             if (inputType === 'media' && Array.isArray(inputData)) {
-                addSystemLog('NVIDIA gÃƒÂ¶rsel girdiyi iÃ…Å¸leyemez; medya yerine aÃƒÂ§Ã„Â±klama metni kullanÃ„Â±lacak.', 'warn');
+                addSystemLog('NVIDIA görsel girdiyi işleyemez; medya yerine açıklama metni kullanılacak.', 'warn');
                 const descs = inputData.map(f => f.name || f.type || 'medya').join(', ');
-                inputData = `KullanÃ„Â±cÃ„Â± Ã…Å¸u medyayÃ„Â± yÃƒÂ¼kledi: ${descs}. Bu medya hakkÃ„Â±nda haber senaryosu ÃƒÂ¼ret.`;
+                inputData = `Kullanıcı şu medyayı yükledi: ${descs}. Bu medya hakkında haber senaryosu üret.`;
                 inputType = 'prompt';
             } else {
                 inputType = 'prompt';
@@ -611,257 +731,257 @@ class LogicEngineService {
             else if (config.duration === '30') { sceneCount = 6; words = `${Math.floor(30 * wps)}-${Math.floor(52 * wps)}`; }
             else if (config.duration === '60') { sceneCount = 9; words = `${Math.floor(60 * wps)}-${Math.floor(82 * wps)}`; }
             else if (config.duration === '90') { sceneCount = 13; words = `${Math.floor(90 * wps)}-${Math.floor(112 * wps)}`; }
-        } else { sceneCount = "Ã„Â°ÃƒÂ§eriÃ„Å¸e gÃƒÂ¶re en az 10, ortalama 18-25 sahne"; words = "Ã„Â°ÃƒÂ§eriÃ„Å¸i eksiksiz anlatacak kadar esnek"; }
+        } else { sceneCount = "İçeriğe göre en az 10, ortalama 18-25 sahne"; words = "İçeriği eksiksiz anlatacak kadar esnek"; }
 
-        let styleInstruction = "Video stili: TarafsÃ„Â±z, analitik, ciddi ve keskin bir haber editÃƒÂ¶rÃƒÂ¼.";
-        if (config.videoStyle === 'prompt_output') styleInstruction = "Video stili: Ãƒâ€“zel Prompt Ãƒâ€¡Ã„Â±ktÃ„Â±sÃ„Â±. KullanÃ„Â±cÃ„Â±nÃ„Â±n girdiÃ„Å¸i metni doÃ„Å¸rudan uygula.";
+        let styleInstruction = "Video stili: Tarafsız, analitik, ciddi ve keskin bir haber editörü.";
+        if (config.videoStyle === 'prompt_output') styleInstruction = "Video stili: Özel Prompt Çıktısı. Kullanıcının girdiği metni doğrudan uygula.";
 
-        let langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU TÃƒÅ“RKÃƒâ€¡E YAZACAKSIN.";
-        if (config.language === 'en') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU Ã„Â°NGÃ„Â°LÃ„Â°ZCE YAZACAKSIN.";
-        if (config.language === 'fr') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU FRANSIZCA YAZACAKSIN.";
-        if (config.language === 'de') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU ALMANCA YAZACAKSIN.";
-        if (config.language === 'es') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU Ã„Â°SPANYOLCA YAZACAKSIN.";
-        if (config.language === 'ar') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU ARAPÃƒâ€¡A YAZACAKSIN.";
-        if (config.language === 'ru') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU RUSÃƒâ€¡A YAZACAKSIN.";
+        let langInstruction = "BÜTÜN SENARYOYU TÜRKÇE YAZACAKSIN.";
+        if (config.language === 'en') langInstruction = "BÜTÜN SENARYOYU İNGİLİZCE YAZACAKSIN.";
+        if (config.language === 'fr') langInstruction = "BÜTÜN SENARYOYU FRANSIZCA YAZACAKSIN.";
+        if (config.language === 'de') langInstruction = "BÜTÜN SENARYOYU ALMANCA YAZACAKSIN.";
+        if (config.language === 'es') langInstruction = "BÜTÜN SENARYOYU İSPANYOLCA YAZACAKSIN.";
+        if (config.language === 'ar') langInstruction = "BÜTÜN SENARYOYU ARAPÇA YAZACAKSIN.";
+        if (config.language === 'ru') langInstruction = "BÜTÜN SENARYOYU RUSÇA YAZACAKSIN.";
 
         const isImageOutput = config.outputType === 'image';
-        let timeConstraint = isUnlimited ? `SÃƒÅ“RE SINIRI YOKTUR. OlayÃ„Â± detaylÃ„Â±ca anlat.` : `DÃ„Â°NAMÃ„Â°K KISITLAYICI: Videonun hedef sÃƒÂ¼resi ${config.duration === '15' ? '15-30' : config.duration === '30' ? '30-60' : config.duration === '60' ? '60-90' : '90-120'} saniyedir. Maksimum ${words.split('-')[1]} KELÃ„Â°ME.`;
+        let timeConstraint = isUnlimited ? `SÜRE SINIRI YOKTUR. Olayı detaylıca anlat.` : `DİNAMİK KISITLAYICI: Videonun hedef süresi ${config.duration === '15' ? '15-30' : config.duration === '30' ? '30-60' : config.duration === '60' ? '60-90' : '90-120'} saniyedir. Maksimum ${words.split('-')[1]} KELİME.`;
 
         let dynamicRules = "";
         if (config.analysisMode === 'yorumsuz') {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (SADECE HABER - YORUMSUZ): Girdiyi dikkatlice incele. SADECE haberi tarafsÃ„Â±zca anlat. 5N1K kurallarÃ„Â±nÃ„Â± uygula. Kendi yorumunu katma.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: 'mediaBlackout.show' deÃ„Å¸erini false yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: 'sonSoz' alanÃ„Â±nÃ„Â± tekrarlama.\nDÃƒâ€“RDÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.\n${timeConstraint}`;
+            dynamicRules = `BİRİNCİ KURAL (SADECE HABER - YORUMSUZ): Girdiyi dikkatlice incele. SADECE haberi tarafsızca anlat. 5N1K kurallarını uygula. Kendi yorumunu katma.\nİKİNCİ KURAL: 'mediaBlackout.show' değerini false yap.\nÜÇÜNCÜ KURAL: 'sonSoz' alanını tekrarlama.\nDÖRDÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.\n${timeConstraint}`;
         } else if (config.analysisMode === 'deep_analysis') {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (DERÃ„Â°N ANALÃ„Â°Z): 5N1K dengesini sorgula ve sosyolojik/ekonomik etkileri analiz et.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: Skandalsa 'mediaBlackout.show' true yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: 'sonSoz' alanÃ„Â±nÃ„Â± tekrarlama.\nDÃƒâ€“RDÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.\n${timeConstraint}`;
+            dynamicRules = `BİRİNCİ KURAL (DERİN ANALİZ): 5N1K dengesini sorgula ve sosyolojik/ekonomik etkileri analiz et.\nİKİNCİ KURAL: Skandalsa 'mediaBlackout.show' true yap.\nÜÇÜNCÜ KURAL: 'sonSoz' alanını tekrarlama.\nDÖRDÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.\n${timeConstraint}`;
         } else {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (HABER 5N1K): Girdiyi incele, 5N1K kuralÃ„Â±na sadÃ„Â±k kalarak ÃƒÂ¶zetle.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: Skandal deÃ„Å¸ilse 'mediaBlackout.show' false yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: 'sonSoz' alanÃ„Â±nÃ„Â± tekrarlama.\nDÃƒâ€“RDÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.\n${timeConstraint}`;
+            dynamicRules = `BİRİNCİ KURAL (HABER 5N1K): Girdiyi incele, 5N1K kuralına sadık kalarak özetle.\nİKİNCİ KURAL: Skandal değilse 'mediaBlackout.show' false yap.\nÜÇÜNCÜ KURAL: 'sonSoz' alanını tekrarlama.\nDÖRDÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.\n${timeConstraint}`;
         }
 
         let sonSozInstruction = "";
-        if (!isImageOutput) sonSozInstruction = `\n\nYEDÃ„Â°NCÃ„Â° KURAL (SON SÃƒâ€“Z): Konuya cuk diye oturan ÃƒÂ§ok vurucu bir ATASÃƒâ€“ZÃƒÅ“ veya Ãƒâ€“ZLÃƒÅ“ SÃƒâ€“Z belirle. Bunu 'sonSoz' alanÃ„Â±na kaydet.`;
+        if (!isImageOutput) sonSozInstruction = `\n\nYEDİNCİ KURAL (SON SÖZ): Konuya cuk diye oturan çok vurucu bir ATASÖZÜ veya ÖZLÜ SÖZ belirle. Bunu 'sonSoz' alanına kaydet.`;
 
-        const sysPrompt = `Sen TikTok ve Instagram Reels iÃƒÂ§in viral iÃƒÂ§erikler ÃƒÂ¼reten profesyonel bir iÃƒÂ§erik ÃƒÂ¼reticisisin. Karakterin: Zeki, gerÃƒÂ§ekleri sÃƒÂ¶yleyen, 20 yaÃ…Å¸Ã„Â±nda dertli bir genÃƒÂ§.\n\nSENARYOYU ${isImageOutput ? 1 : sceneCount} SAHNE olacak Ã…Å¸ekilde bÃƒÂ¶l!\nToplam konuÃ…Å¸ma metni ${words} kelime aralÃ„Â±Ã„Å¸Ã„Â±nda olmalÃ„Â±dÃ„Â±r.\n\nDÃ„Â°L KURALI: ${langInstruction}\n${styleInstruction}\n${dynamicRules}\n\nSES DOSYASI KURALI: EÃ„Å¸er sana bir ses dosyasÃ„Â± (audio) gÃƒÂ¶nderildiyse, Ãƒâ€“NCELÃ„Â°KLE sesi dikkatle dinle ve konuÃ…Å¸ulan her kelimeyi yazÃ„Â±ya dÃƒÂ¶k (transkribe et). Transkripti analiz et ve haber senaryosunu bu transkript ÃƒÂ¼zerinden ÃƒÂ¼ret. MÃƒÂ¼zik dosyasÃ„Â± ise (konuÃ…Å¸ma yoksa), dosya adÃ„Â±ndan ve mÃƒÂ¼zik tÃƒÂ¼rÃƒÂ¼nden anlam ÃƒÂ§Ã„Â±karmaya ÃƒÂ§alÃ„Â±Ã…Å¸.\n\nEKONOMI KURALLARI (ekonomi haberi ise): Turkce karakter kullan, TL para birimi, sayi bicimi 85.450 TL, kaynak belirt (TUIK, TCMB, TURK-IS), aclik/yoksulluk siniri guncel olsun. Bilgi kartlari olustur: ENFLASYON %XX, ACLIK SINIRI XX.XXX TL.\n\nGAZETE BAÃ…ÂLIKLARI: GÃƒÂ¶rseldeki TÃƒÅ“M haber baÃ…Å¸lÃ„Â±klarÃ„Â±nÃ„Â± ÃƒÂ§Ã„Â±kar. Her baÃ…Å¸lÃ„Â±k iÃƒÂ§in:
-- 'baslik': baÃ…Å¸lÃ„Â±k metni
-- 'aciklama': haberin 2-3 cÃƒÂ¼mlelik ÃƒÂ¶zeti
-- 'x': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n sol ÃƒÂ¼st x koordinatÃ„Â± (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'y': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n sol ÃƒÂ¼st y koordinatÃ„Â± (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'w': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n geniÃ…Å¸liÃ„Å¸i (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'h': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n yÃƒÂ¼ksekliÃ„Å¸i (0-100 arasÃ„Â± yÃƒÂ¼zde)
-En az 1, en fazla 15 baÃ…Å¸lÃ„Â±k ÃƒÂ§Ã„Â±kar. KalÃ„Â±n siyah veya kÃ„Â±rmÃ„Â±zÃ„Â± yazÃ„Â± ile yazÃ„Â±lan baÃ…Å¸lÃ„Â±klarÃ„Â± al. Reklam, bulmaca, ilan HARÃ„Â°Ãƒâ€¡.
+        const sysPrompt = `Sen TikTok ve Instagram Reels için viral içerikler üreten profesyonel bir içerik üreticisisin. Karakterin: Zeki, gerçekleri söyleyen, 20 yaşında dertli bir genç.\n\nSENARYOYU ${isImageOutput ? 1 : sceneCount} SAHNE olacak şekilde böl!\nToplam konuşma metni ${words} kelime aralığında olmalıdır.\n\nDİL KURALI: ${langInstruction}\n${styleInstruction}\n${dynamicRules}\n\nSES DOSYASI KURALI: Eğer sana bir ses dosyası (audio) gönderildiyse, ÖNCELİKLE sesi dikkatle dinle ve konuşulan her kelimeyi yazıya dök (transkribe et). Transkripti analiz et ve haber senaryosunu bu transkript üzerinden üret. Müzik dosyası ise (konuşma yoksa), dosya adından ve müzik türünden anlam çıkarmaya çalış.\n\nEKONOMI KURALLARI (ekonomi haberi ise): Turkce karakter kullan, TL para birimi, sayi bicimi 85.450 TL, kaynak belirt (TUIK, TCMB, TURK-IS), aclik/yoksulluk siniri guncel olsun. Bilgi kartlari olustur: ENFLASYON %XX, ACLIK SINIRI XX.XXX TL.\n\nGAZETE BAŞLIKLARI: Görseldeki TÜM haber başlıklarını çıkar. Her başlık için:
+- 'baslik': başlık metni
+- 'aciklama': haberin 2-3 cümlelik özeti
+- 'x': başlığın sol üst x koordinatı (0-100 arası yüzde)
+- 'y': başlığın sol üst y koordinatı (0-100 arası yüzde)
+- 'w': başlığın genişliği (0-100 arası yüzde)
+- 'h': başlığın yüksekliği (0-100 arası yüzde)
+En az 1, en fazla 15 başlık çıkar. Kalın siyah veya kırmızı yazı ile yazılan başlıkları al. Reklam, bulmaca, ilan HARİÇ.
 
-KAPAK DÃ„Â°LÃ„Â°: 'thumbnailText' ${config.language} dilinde olmalÃ„Â±dÃ„Â±r. Clickbait baÃ…Å¸lÃ„Â±k olmalÃ„Â±dÃ„Â±r.\nGRAFÃ„Â°KLER: Ã„Â°statistik yoksa 'chartData.show' false yap.\nGÃƒâ€“RSEL UYUMU: 'imagePrompts' alanÃ„Â±na yazacaÃ„Å¸Ã„Â±n Ã„Â°ngilizce komutlar, spokenText'teki ana gÃƒÂ¶rsel unsurlarÃ„Â± birebir tanÃ„Â±mlamalÃ„Â±dÃ„Â±r. KiÃ…Å¸i varsa yÃƒÂ¼z tanÃ„Â±mlÃ„Â±, mekan varsa detaylÃ„Â±, nesne varsa belirgin olmalÃ„Â±dÃ„Â±r. Her sahne iÃƒÂ§in tek bir gÃƒÂ¼ÃƒÂ§lÃƒÂ¼ prompt yaz.\nSIFIR HALÃƒÅ“SÃ„Â°NASYON: OkuyamadÃ„Â±ysan 'isContentUnreadable' true yap.\nATATÃƒÅ“RK HASSASÃ„Â°YETÃ„Â°: 'AtatÃƒÂ¼rk' geÃƒÂ§erse 'imagePrompts' kÃ„Â±smÃ„Â±na "Mustafa Kemal AtatÃƒÂ¼rk, highly detailed, respectful portrait" ekle!${sonSozInstruction}\n\nDÃƒÂ¶nÃƒÂ¼Ã…Å¸ ZORUNLU olarak JSON formatÃ„Â±nda olmalÃ„Â±.`;
+KAPAK DİLİ: 'thumbnailText' ${config.language} dilinde olmalıdır. Clickbait başlık olmalıdır.\nGRAFİKLER: İstatistik yoksa 'chartData.show' false yap.\nGÖRSEL UYUMU: 'imagePrompts' alanına yazacağın İngilizce komutlar, spokenText'teki ana görsel unsurları birebir tanımlamalıdır. Kişi varsa yüz tanımlı, mekan varsa detaylı, nesne varsa belirgin olmalıdır. Her sahne için tek bir güçlü prompt yaz.\nSIFIR HALÜSİNASYON: Okuyamadıysan 'isContentUnreadable' true yap.\nATATÜRK HASSASİYETİ: 'Atatürk' geçerse 'imagePrompts' kısmına "Mustafa Kemal Atatürk, highly detailed, respectful portrait" ekle!${sonSozInstruction}\n\nDönüş ZORUNLU olarak JSON formatında olmalı.`;
 
         let userPrompt = "";
-        let extractStatsHint = "OlayÃ„Â± tam anla ve KISA BÃ„Â°R Ãƒâ€“ZET ver.";
-        if (config.analysisMode === 'yorumsuz') extractStatsHint = "SADECE haberi tarafsÃ„Â±zca oku.";
+        let extractStatsHint = "Olayı tam anla ve KISA BİR ÖZET ver.";
+        if (config.analysisMode === 'yorumsuz') extractStatsHint = "SADECE haberi tarafsızca oku.";
 
         if (inputType === 'prompt' || inputType === 'media') {
-            userPrompt = `AÃ…ÂAÃ„ÂIDAKÃ„Â° TALÃ„Â°MATI UYGULA:\n\n${inputData}\n\n${extractStatsHint}`;
+            userPrompt = `AŞAĞIDAKİ TALİMATI UYGULA:\n\n${inputData}\n\n${extractStatsHint}`;
         }
         else if (inputType === 'url') {
-            userPrompt = `[KRÃ„Â°TÃ„Â°K GÃƒâ€“REV]: URL'yi araÃ…Å¸tÃ„Â±r. \nURL: ${inputData}\n\nÃ„Â°ÃƒÂ§eriÃ„Å¸e ulaÃ…Å¸tÃ„Â±ysan haberi ÃƒÂ¶zetle. ${extractStatsHint}\nNOT: Ã„Â°nternet eriÃ…Å¸imin yoksa, bu URL hakkÃ„Â±nda makul bir haber senaryosu ÃƒÂ¼ret.`;
+            userPrompt = `[KRİTİK GÖREV]: URL'yi araştır. \nURL: ${inputData}\n\nİçeriğe ulaştıysan haberi özetle. ${extractStatsHint}\nNOT: İnternet erişimin yoksa, bu URL hakkında makul bir haber senaryosu üret.`;
         }
         else {
-            userPrompt = `AÃ…Å¸aÃ„Å¸Ã„Â±daki konuyu araÃ…Å¸tÃ„Â±r. Haberi ÃƒÂ¶zetle. \n\n${inputData}\n\n${extractStatsHint}`;
+            userPrompt = `Aşağıdaki konuyu araştır. Haberi özetle. \n\n${inputData}\n\n${extractStatsHint}`;
         }
 
-        // NVIDIA chat completions ile JSON ÃƒÂ§Ã„Â±kÃ„Â±Ã…Å¸Ã„Â±
+        // NVIDIA chat completions ile JSON çıkışı
         try {
             const parsedData = await callAI(sysPrompt, userPrompt, { json: true, temperature: 0.7, max_tokens: 4096 });
-            if (typeof parsedData === 'string') throw new Error('JSON ayrÃ„Â±Ã…Å¸madÃ„Â±: ' + parsedData.substring(0, 100));
-            if (parsedData.isContentUnreadable) throw new Error("Orijinal metne ulaÃ…Å¸Ã„Â±lamadÃ„Â±.");
+            if (typeof parsedData === 'string') throw new Error('JSON ayrışmadı: ' + parsedData.substring(0, 100));
+            if (parsedData.isContentUnreadable) throw new Error("Orijinal metne ulaşılamadı.");
             if (parsedData.videoSlides) {
-                const errPatterns = [/gÃƒÂ¶rselde.*metin.*bulunmamaktadÃ„Â±r/i, /no.*text.*found/i, /metin.*bulunamadÃ„Â±/i, /cannot.*read.*text/i];
+                const errPatterns = [/görselde.*metin.*bulunmamaktadır/i, /no.*text.*found/i, /metin.*bulunamadı/i, /cannot.*read.*text/i];
                 parsedData.videoSlides = parsedData.videoSlides.map(slide => {
                     if (slide.spokenText && errPatterns.some(p => p.test(slide.spokenText))) {
-                        return { ...slide, spokenText: slide.topText || "Bu gÃƒÂ¶rseldeki iÃƒÂ§erik hakkÃ„Â±nda bilgi veriliyor." };
+                        return { ...slide, spokenText: slide.topText || "Bu görseldeki içerik hakkında bilgi veriliyor." };
                     }
                     return slide;
                 });
             }
             return parsedData;
         } catch (e) {
-            if (e.message.includes('metne ulaÃ…Å¸Ã„Â±lamadÃ„Â±')) throw e;
-            throw new Error(`NVIDIA analiz hatasÃ„Â±: ${e.message}`);
+            if (e.message.includes('metne ulaşılamadı')) throw e;
+            throw new Error(`NVIDIA analiz hatası: ${e.message}`);
         }
     }
 
-    // Tek bir gÃƒÂ¶rsel iÃƒÂ§in 2-3 sahne ÃƒÂ¼retir (sÃ„Â±ralÃ„Â± akÃ„Â±Ã…Å¸ iÃƒÂ§in)
+    // Tek bir görsel için 2-3 sahne üretir (sıralı akış için)
     static async analyzeContentForImage(inputData, inputType, config, imageIndex, totalImages, previousContext) {
-        addSystemLog(`GÃƒÂ¶rsel ${imageIndex + 1}/${totalImages} iÃƒÂ§in sahneler ÃƒÂ¼retiliyor (NVIDIA)...`, 'info');
-        // NVIDIA gÃƒÂ¶rsel girdiyi desteklemez
+        addSystemLog(`Görsel ${imageIndex + 1}/${totalImages} için sahneler üretiliyor (NVIDIA)...`, 'info');
+        // NVIDIA görsel girdiyi desteklemez
         if (inputType === 'media' && Array.isArray(inputData)) {
             const descs = inputData.map(f => f.name || f.type).join(', ');
-            inputData = `GÃƒÂ¶rsel aÃƒÂ§Ã„Â±klamasÃ„Â±: ${descs}. Bu gÃƒÂ¶rseldeki haberi/konuyu detaylÃ„Â±ca anlat.`;
+            inputData = `Görsel açıklaması: ${descs}. Bu görseldeki haberi/konuyu detaylıca anlat.`;
             inputType = 'prompt';
         }
 
-        let styleInstruction = "Video stili: TarafsÃ„Â±z, analitik, ciddi ve keskin bir haber editÃƒÂ¶rÃƒÂ¼.";
-        if (config.videoStyle === 'prompt_output') styleInstruction = "Video stili: Ãƒâ€“zel Prompt Ãƒâ€¡Ã„Â±ktÃ„Â±sÃ„Â±. KullanÃ„Â±cÃ„Â±nÃ„Â±n girdiÃ„Å¸i metni doÃ„Å¸rudan uygula.";
+        let styleInstruction = "Video stili: Tarafsız, analitik, ciddi ve keskin bir haber editörü.";
+        if (config.videoStyle === 'prompt_output') styleInstruction = "Video stili: Özel Prompt Çıktısı. Kullanıcının girdiği metni doğrudan uygula.";
 
-        let langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU TÃƒÅ“RKÃƒâ€¡E YAZACAKSIN.";
-        if (config.language === 'en') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU Ã„Â°NGÃ„Â°LÃ„Â°ZCE YAZACAKSIN.";
-        if (config.language === 'fr') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU FRANSIZCA YAZACAKSIN.";
-        if (config.language === 'de') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU ALMANCA YAZACAKSIN.";
-        if (config.language === 'es') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU Ã„Â°SPANYOLCA YAZACAKSIN.";
-        if (config.language === 'ar') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU ARAPÃƒâ€¡A YAZACAKSIN.";
-        if (config.language === 'ru') langInstruction = "BÃƒÅ“TÃƒÅ“N SENARYOYU RUSÃƒâ€¡A YAZACAKSIN.";
+        let langInstruction = "BÜTÜN SENARYOYU TÜRKÇE YAZACAKSIN.";
+        if (config.language === 'en') langInstruction = "BÜTÜN SENARYOYU İNGİLİZCE YAZACAKSIN.";
+        if (config.language === 'fr') langInstruction = "BÜTÜN SENARYOYU FRANSIZCA YAZACAKSIN.";
+        if (config.language === 'de') langInstruction = "BÜTÜN SENARYOYU ALMANCA YAZACAKSIN.";
+        if (config.language === 'es') langInstruction = "BÜTÜN SENARYOYU İSPANYOLCA YAZACAKSIN.";
+        if (config.language === 'ar') langInstruction = "BÜTÜN SENARYOYU ARAPÇA YAZACAKSIN.";
+        if (config.language === 'ru') langInstruction = "BÜTÜN SENARYOYU RUSÇA YAZACAKSIN.";
 
         let dynamicRules = "";
         if (config.analysisMode === 'yorumsuz') {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (SADECE HABER - YORUMSUZ): Girdiyi dikkatlice incele. SADECE haberi tarafsÃ„Â±zca anlat. 5N1K kurallarÃ„Â±nÃ„Â± uygula. Kendi yorumunu katma.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: 'mediaBlackout.show' deÃ„Å¸erini false yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.`;
+            dynamicRules = `BİRİNCİ KURAL (SADECE HABER - YORUMSUZ): Girdiyi dikkatlice incele. SADECE haberi tarafsızca anlat. 5N1K kurallarını uygula. Kendi yorumunu katma.\nİKİNCİ KURAL: 'mediaBlackout.show' değerini false yap.\nÜÇÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.`;
         } else if (config.analysisMode === 'deep_analysis') {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (DERÃ„Â°N ANALÃ„Â°Z): 5N1K dengesini sorgula ve sosyolojik/ekonomik etkileri analiz et.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: Skandalsa 'mediaBlackout.show' true yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.`;
+            dynamicRules = `BİRİNCİ KURAL (DERİN ANALİZ): 5N1K dengesini sorgula ve sosyolojik/ekonomik etkileri analiz et.\nİKİNCİ KURAL: Skandalsa 'mediaBlackout.show' true yap.\nÜÇÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.`;
         } else {
-            dynamicRules = `BÃ„Â°RÃ„Â°NCÃ„Â° KURAL (HABER 5N1K): Girdiyi incele, 5N1K kuralÃ„Â±na sadÃ„Â±k kalarak ÃƒÂ¶zetle.\nÃ„Â°KÃ„Â°NCÃ„Â° KURAL: Skandal deÃ„Å¸ilse 'mediaBlackout.show' false yap.\nÃƒÅ“Ãƒâ€¡ÃƒÅ“NCÃƒÅ“ KURAL: Her sahnenin 'spokenText' metni NOKTA Ã„Â°LE BÃ„Â°TEN BÃ„Â°R CÃƒÅ“MLE OLMALIDIR.`;
+            dynamicRules = `BİRİNCİ KURAL (HABER 5N1K): Girdiyi incele, 5N1K kuralına sadık kalarak özetle.\nİKİNCİ KURAL: Skandal değilse 'mediaBlackout.show' false yap.\nÜÇÜNCÜ KURAL: Her sahnenin 'spokenText' metni NOKTA İLE BİTEN BİR CÜMLE OLMALIDIR.`;
         }
 
-        const contextBlock = previousContext ? `\nÃƒâ€“NCEKÃ„Â° BLOKLARIN Ãƒâ€“ZETÃ„Â°: ${previousContext}\nBu bilgileri tekrarlama, SADECE bu gÃƒÂ¶rsel/eÃ„Å¸erseldeki yeni iÃƒÂ§eriÃ„Å¸e odaklan.` : "";
+        const contextBlock = previousContext ? `\nÖNCEKİ BLOKLARIN ÖZETİ: ${previousContext}\nBu bilgileri tekrarlama, SADECE bu görsel/eğerseldeki yeni içeriğe odaklan.` : "";
         const isLastImage = imageIndex === totalImages - 1;
-        const sonSozRule = isLastImage ? `\n\nYEDÃ„Â°NCÃ„Â° KURAL (SON SÃƒâ€“Z): Konuya cuk diye oturan ÃƒÂ§ok vurucu bir ATASÃƒâ€“ZÃƒÅ“ veya Ãƒâ€“ZLÃƒÅ“ SÃƒâ€“Z belirle. Bunu 'sonSoz' alanÃ„Â±na kaydet.` : "";
+        const sonSozRule = isLastImage ? `\n\nYEDİNCİ KURAL (SON SÖZ): Konuya cuk diye oturan çok vurucu bir ATASÖZÜ veya ÖZLÜ SÖZ belirle. Bunu 'sonSoz' alanına kaydet.` : "";
 
-        const sysPrompt = `Bu, ${totalImages} gÃƒÂ¶rsellik bir videonun ${imageIndex + 1}. bloÃ„Å¸udur.\nSen TikTok ve Instagram Reels iÃƒÂ§in viral iÃƒÂ§erikler ÃƒÂ¼reten profesyonel bir iÃƒÂ§erik ÃƒÂ¼reticisisin.\n\nSENARYOYU TAM OLARAK 2 SAHNE olacak Ã…Å¸ekilde bÃƒÂ¶l! GÃƒÂ¶rseldeki haberi/konuyu 2 farklÃ„Â± aÃƒÂ§Ã„Â±dan anlat.\nHer sahne bu gÃƒÂ¶rsele ait haberi anlatmalÃ„Â±.\nToplam konuÃ…Å¸ma metni bu blok iÃƒÂ§in 30-50 kelime aralÃ„Â±Ã„Å¸Ã„Â±nda olmalÃ„Â±dÃ„Â±r.\n\nDÃ„Â°L KURALI: ${langInstruction}\n${styleInstruction}\n${dynamicRules}\n${contextBlock}\n\nGAZETE BAÃ…ÂLIKLARI: GÃƒÂ¶rseldeki TÃƒÅ“M haber baÃ…Å¸lÃ„Â±klarÃ„Â±nÃ„Â± ÃƒÂ§Ã„Â±kar. Her baÃ…Å¸lÃ„Â±k iÃƒÂ§in:
-- 'baslik': baÃ…Å¸lÃ„Â±k metni
-- 'aciklama': haberin 2-3 cÃƒÂ¼mlelik ÃƒÂ¶zeti
-- 'x': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n sol ÃƒÂ¼st x koordinatÃ„Â± (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'y': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n sol ÃƒÂ¼st y koordinatÃ„Â± (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'w': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n geniÃ…Å¸liÃ„Å¸i (0-100 arasÃ„Â± yÃƒÂ¼zde)
-- 'h': baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±n yÃƒÂ¼ksekliÃ„Å¸i (0-100 arasÃ„Â± yÃƒÂ¼zde)
-En az 1, en fazla 15 baÃ…Å¸lÃ„Â±k ÃƒÂ§Ã„Â±kar. KalÃ„Â±n siyah veya kÃ„Â±rmÃ„Â±zÃ„Â± yazÃ„Â± ile yazÃ„Â±lan baÃ…Å¸lÃ„Â±klarÃ„Â± al. Reklam, bulmaca, ilan HARÃ„Â°Ãƒâ€¡.
+        const sysPrompt = `Bu, ${totalImages} görsellik bir videonun ${imageIndex + 1}. bloğudur.\nSen TikTok ve Instagram Reels için viral içerikler üreten profesyonel bir içerik üreticisisin.\n\nSENARYOYU TAM OLARAK 2 SAHNE olacak şekilde böl! Görseldeki haberi/konuyu 2 farklı açıdan anlat.\nHer sahne bu görsele ait haberi anlatmalı.\nToplam konuşma metni bu blok için 30-50 kelime aralığında olmalıdır.\n\nDİL KURALI: ${langInstruction}\n${styleInstruction}\n${dynamicRules}\n${contextBlock}\n\nGAZETE BAŞLIKLARI: Görseldeki TÜM haber başlıklarını çıkar. Her başlık için:
+- 'baslik': başlık metni
+- 'aciklama': haberin 2-3 cümlelik özeti
+- 'x': başlığın sol üst x koordinatı (0-100 arası yüzde)
+- 'y': başlığın sol üst y koordinatı (0-100 arası yüzde)
+- 'w': başlığın genişliği (0-100 arası yüzde)
+- 'h': başlığın yüksekliği (0-100 arası yüzde)
+En az 1, en fazla 15 başlık çıkar. Kalın siyah veya kırmızı yazı ile yazılan başlıkları al. Reklam, bulmaca, ilan HARİÇ.
 
-KAPAK DÃ„Â°LÃ„Â°: 'thumbnailText' ${config.language} dilinde olmalÃ„Â±dÃ„Â±r. Clickbait baÃ…Å¸lÃ„Â±k olmalÃ„Â±dÃ„Â±r.\nGRAFÃ„Â°KLER: Ã„Â°statistik yoksa 'chartData.show' false yap.\nGÃƒâ€“RSEL UYUMU: 'imagePrompts' alanÃ„Â±na yazacaÃ„Å¸Ã„Â±n Ã„Â°ngilizce komutlar, spokenText'teki ana gÃƒÂ¶rsel unsurlarÃ„Â± birebir tanÃ„Â±mlamalÃ„Â±dÃ„Â±r.\nATATÃƒÅ“RK HASSASÃ„Â°YETÃ„Â°: 'AtatÃƒÂ¼rk' geÃƒÂ§erse 'imagePrompts' kÃ„Â±smÃ„Â±na "Mustafa Kemal AtatÃƒÂ¼rk, highly detailed, respectful portrait" ekle!${sonSozRule}\n\nDÃƒÂ¶nÃƒÂ¼Ã…Å¸ ZORUNLU olarak JSON formatÃ„Â±nda olmalÃ„Â±.`;
+KAPAK DİLİ: 'thumbnailText' ${config.language} dilinde olmalıdır. Clickbait başlık olmalıdır.\nGRAFİKLER: İstatistik yoksa 'chartData.show' false yap.\nGÖRSEL UYUMU: 'imagePrompts' alanına yazacağın İngilizce komutlar, spokenText'teki ana görsel unsurları birebir tanımlamalıdır.\nATATÜRK HASSASİYETİ: 'Atatürk' geçerse 'imagePrompts' kısmına "Mustafa Kemal Atatürk, highly detailed, respectful portrait" ekle!${sonSozRule}\n\nDönüş ZORUNLU olarak JSON formatında olmalı.`;
 
         let userPrompt = "";
-        let extractStatsHint = "OlayÃ„Â± tam anla ve KISA BÃ„Â°R Ãƒâ€“ZET ver.";
-        if (config.analysisMode === 'yorumsuz') extractStatsHint = "SADECE haberi tarafsÃ„Â±zca oku.";
+        let extractStatsHint = "Olayı tam anla ve KISA BİR ÖZET ver.";
+        if (config.analysisMode === 'yorumsuz') extractStatsHint = "SADECE haberi tarafsızca oku.";
 
         if (inputType === 'prompt' || inputType === 'media') {
-            userPrompt = `AÃ…ÂAÃ„ÂIDAKÃ„Â° TALÃ„Â°MATI UYGULA (Bu ${imageIndex + 1}/${totalImages} blok):\n\n${inputData}\n\n${extractStatsHint}`;
+            userPrompt = `AŞAĞIDAKİ TALİMATI UYGULA (Bu ${imageIndex + 1}/${totalImages} blok):\n\n${inputData}\n\n${extractStatsHint}`;
         } else if (inputType === 'url') {
-            userPrompt = `URL'yi araÃ…Å¸tÃ„Â±r (Bu ${imageIndex + 1}/${totalImages} blok):\nURL: ${inputData}\n${extractStatsHint}`;
+            userPrompt = `URL'yi araştır (Bu ${imageIndex + 1}/${totalImages} blok):\nURL: ${inputData}\n${extractStatsHint}`;
         } else {
-            userPrompt = `Konuyu araÃ…Å¸tÃ„Â±r (Bu ${imageIndex + 1}/${totalImages} blok):\n${inputData}\n${extractStatsHint}`;
+            userPrompt = `Konuyu araştır (Bu ${imageIndex + 1}/${totalImages} blok):\n${inputData}\n${extractStatsHint}`;
         }
 
         try {
             const parsedData = await callAI(sysPrompt, userPrompt, { json: true, temperature: 0.7, max_tokens: 2048 });
-            if (typeof parsedData === 'string') throw new Error('JSON ayrÃ„Â±Ã…Å¸madÃ„Â±');
-            if (parsedData.isContentUnreadable) throw new Error("Orijinal metne ulaÃ…Å¸Ã„Â±lamadÃ„Â±.");
+            if (typeof parsedData === 'string') throw new Error('JSON ayrışmadı');
+            if (parsedData.isContentUnreadable) throw new Error("Orijinal metne ulaşılamadı.");
             if (parsedData.videoSlides) {
-                const errPatterns = [/gÃƒÂ¶rselde.*metin.*bulunmamaktadÃ„Â±r/i, /no.*text.*found/i, /metin.*bulunamadÃ„Â±/i, /cannot.*read.*text/i];
+                const errPatterns = [/görselde.*metin.*bulunmamaktadır/i, /no.*text.*found/i, /metin.*bulunamadı/i, /cannot.*read.*text/i];
                 parsedData.videoSlides = parsedData.videoSlides.map(slide => {
                     if (slide.spokenText && errPatterns.some(p => p.test(slide.spokenText))) {
-                        return { ...slide, spokenText: slide.topText || "Bu gÃƒÂ¶rseldeki iÃƒÂ§erik hakkÃ„Â±nda bilgi veriliyor." };
+                        return { ...slide, spokenText: slide.topText || "Bu görseldeki içerik hakkında bilgi veriliyor." };
                     }
                     return slide;
                 });
             }
-            addSystemLog(`GÃƒÂ¶rsel ${imageIndex + 1} iÃƒÂ§in ${parsedData.videoSlides?.length || 0} sahne ÃƒÂ¼retildi.`, 'success');
+            addSystemLog(`Görsel ${imageIndex + 1} için ${parsedData.videoSlides?.length || 0} sahne üretildi.`, 'success');
             return parsedData;
         } catch (e) {
-            if (e.message.includes('metne ulaÃ…Å¸Ã„Â±lamadÃ„Â±')) throw e;
-            throw new Error(`JSON format hatasÃ„Â± (GÃƒÂ¶rsel ${imageIndex + 1}): ${e.message}`);
+            if (e.message.includes('metne ulaşılamadı')) throw e;
+            throw new Error(`JSON format hatası (Görsel ${imageIndex + 1}): ${e.message}`);
         }
     }
 
     
     static async _buildElestiriScript(inputData, inputType, config) {
-        addSystemLog('EleÃ…Å¸tiri analizi baÃ…Å¸lÃ„Â±yor...', 'info');
-        // NVIDIA gÃƒÂ¶rsel girdiyi desteklemez
+        addSystemLog('Eleştiri analizi başlıyor...', 'info');
+        // NVIDIA görsel girdiyi desteklemez
         if (inputType === 'media' && Array.isArray(inputData)) {
             const descs = inputData.map(f => f.name || f.type).join(', ');
-            inputData = `Medya aÃƒÂ§Ã„Â±klamasÃ„Â±: ${descs}. Bu iÃƒÂ§eriÃ„Å¸i analiz et.`;
+            inputData = `Medya açıklaması: ${descs}. Bu içeriği analiz et.`;
             inputType = 'prompt';
         }
 
-        // 1. Ã„Â°ÃƒÂ§eriÃ„Å¸i analiz et
+        // 1. İçeriği analiz et
         let parts = [];
         let contentText = '';
 
         if (inputType === 'prompt' || inputType === 'text' || inputType === 'media') {
             contentText = typeof inputData === 'string' ? inputData : '';
-            parts = [{ text: `AÃ…Å¸aÃ„Å¸Ã„Â±daki iÃƒÂ§eriÃ„Å¸i analiz et:\n\n${contentText}` }];
+            parts = [{ text: `Aşağıdaki içeriği analiz et:\n\n${contentText}` }];
         } else if (inputType === 'url') {
-            parts = [{ text: `Bu URL'deki iÃƒÂ§eriÃ„Å¸i araÃ…Å¸tÃ„Â±r ve analiz et: ${inputData}` }];
+            parts = [{ text: `Bu URL'deki içeriği araştır ve analiz et: ${inputData}` }];
         }
 
-        // 2. TÃƒÂ¼rkiye gerÃƒÂ§ekleri ile karÃ…Å¸Ã„Â±laÃ…Å¸tÃ„Â±rmalÃ„Â± analiz
-        const sysPrompt = `Sen bir TÃƒÂ¼rk medya eleÃ…Å¸tirmeni ve fact-checker'sÃ„Â±n. GÃƒÂ¶revin:
+        // 2. Türkiye gerçekleri ile karşılaştırmalı analiz
+        const sysPrompt = `Sen bir Türk medya eleştirmeni ve fact-checker'sın. Görevin:
 
-1. Verilen iÃƒÂ§eriÃ„Å¸i dikkatle analiz et
-2. Ã„Â°ÃƒÂ§erideki iddialarÃ„Â±, savunulan gÃƒÂ¶rÃƒÂ¼Ã…Å¸leri tespit et
-3. Her iddiayÃ„Â± TÃƒÂ¼rkiye'nin GÃƒÅ“NCEL GERÃƒâ€¡EKLERÃ„Â° ile karÃ…Å¸Ã„Â±laÃ…Å¸tÃ„Â±r
+1. Verilen içeriği dikkatle analiz et
+2. İçerideki iddiaları, savunulan görüşleri tespit et
+3. Her iddiayı Türkiye'nin GÜNCEL GERÇEKLERİ ile karşılaştır
 
-GÃƒÅ“NCEL VERÃ„Â° ZORUNLULUÃ„ÂU (2026):
-- En gÃƒÂ¼ncel TÃƒÅ“Ã„Â°K verilerini kullan (MayÃ„Â±s-Haziran 2026)
-- En gÃƒÂ¼ncel TCMB verilerini kullan (Haziran 2026)
-- En gÃƒÂ¼ncel Hazine verilerini kullan
-- Verilerin tarihini BELÃ„Â°RT (ÃƒÂ¶rn: "TÃƒÅ“Ã„Â°K Haziran 2026 verilerine gÃƒÂ¶re...")
-- Eski veri kullanma, gÃƒÂ¼ncel olanÃ„Â± bul
+GÜNCEL VERİ ZORUNLULUĞU (2026):
+- En güncel TÜİK verilerini kullan (Mayıs-Haziran 2026)
+- En güncel TCMB verilerini kullan (Haziran 2026)
+- En güncel Hazine verilerini kullan
+- Verilerin tarihini BELİRT (örn: "TÜİK Haziran 2026 verilerine göre...")
+- Eski veri kullanma, güncel olanı bul
 
 KAYNAKLAR (her sahne sonunda link ekle):
-- TÃƒÅ“Ã„Â°K: https://data.tuik.gov.tr
+- TÜİK: https://data.tuik.gov.tr
 - TCMB: https://www.tcmb.gov.tr
 - Hazine: https://www.hmb.gov.tr
-- DÃ„Â°SK-AR: https://disk.org.tr/arastirma/
+- DİSK-AR: https://disk.org.tr/arastirma/
 - IMF: https://www.imf.org
-- DÃƒÂ¼nya BankasÃ„Â±: https://data.worldbank.org
+- Dünya Bankası: https://data.worldbank.org
 
 ELE ALINACAK KONULAR:
-- Ekonomi: Enflasyon (TÃƒÅ“FE/ÃƒÅ“FE), faiz, dÃƒÂ¶viz kuru (USD/TRY), dÃ„Â±Ã…Å¸ borÃƒÂ§, GSMH, iÃ…Å¸sizlik, asgari ÃƒÂ¼cret
-- Sosyal: Yoksulluk oranÃ„Â±, gelir daÃ„Å¸Ã„Â±lÃ„Â±mÃ„Â± (Gini), aÃƒÂ§lÃ„Â±k/yoksulluk sÃ„Â±nÃ„Â±rÃ„Â±, ultra zengin vs fakir sayÃ„Â±sÃ„Â±
-- EÃ„Å¸itim: PISA sonuÃƒÂ§larÃ„Â±, ÃƒÂ¶Ã„Å¸retmen maaÃ…Å¸larÃ„Â±
-- SaÃ„Å¸lÃ„Â±k: OECD karÃ…Å¸Ã„Â±laÃ…Å¸tÃ„Â±rmalarÃ„Â±
+- Ekonomi: Enflasyon (TÜFE/ÜFE), faiz, döviz kuru (USD/TRY), dış borç, GSMH, işsizlik, asgari ücret
+- Sosyal: Yoksulluk oranı, gelir dağılımı (Gini), açlık/yoksulluk sınırı, ultra zengin vs fakir sayısı
+- Eğitim: PISA sonuçları, öğretmen maaşları
+- Sağlık: OECD karşılaştırmaları
 
-Ãƒâ€¡IKTI FORMATI:
-- Her sahne: Ã„Â°DDÃ„Â°A Ã¢â€ â€™ GERÃƒâ€¡EK Ã¢â€ â€™ KAYNAK (link ile)
-- DoÃ„Å¸ruysa: Ãƒâ€“rneklerle destekle
-- YanlÃ„Â±Ã…Å¸sa: Resmi verilerle ÃƒÂ§ÃƒÂ¼rÃƒÂ¼t + kaynak linki
-- Tarih belirt (ÃƒÂ¶rn: "Haziran 2026")
-- TarafsÃ„Â±z ve objektif ol
+ÇIKTI FORMATI:
+- Her sahne: İDDİA → GERÇEK → KAYNAK (link ile)
+- Doğruysa: Örneklerle destekle
+- Yanlışsa: Resmi verilerle çürüt + kaynak linki
+- Tarih belirt (örn: "Haziran 2026")
+- Tarafsız ve objektif ol
 
-SON SAHNE (KAYNAKLAR LÃ„Â°STESÃ„Â°):
-- TÃƒÂ¼m kaynaklarÃ„Â± listele (baÃ…Å¸lÃ„Â±k + URL + tarih)
+SON SAHNE (KAYNAKLAR LİSTESİ):
+- Tüm kaynakları listele (başlık + URL + tarih)
 
 KURALLAR:
 - 'dezenformasyon' kelimesini kullanma
-- 5N1K kuralÃ„Â±na uy
-- Her sahne NOKTA ile biten cÃƒÂ¼mle olmalÃ„Â±
-- Clickbait: sansasyonel ama doÃ„Å¸ru`
+- 5N1K kuralına uy
+- Her sahne NOKTA ile biten cümle olmalı
+- Clickbait: sansasyonel ama doğru`
 
         const userPrompt = parts.map(p => p.text).join('\n');
         try {
             const parsedData = await callAI(sysPrompt, userPrompt, { json: true, temperature: 0.5, max_tokens: 4096 });
-            if (typeof parsedData === 'string') throw new Error('JSON ayrÃ„Â±Ã…Å¸madÃ„Â±');
-            if (parsedData.isContentUnreadable) throw new Error("Ã„Â°ÃƒÂ§erik okunamadÃ„Â±.");
-            addSystemLog(`EleÃ…Å¸tiri analizi tamamlandÃ„Â±: ${parsedData.videoSlides?.length || 0} sahne.`, 'success');
+            if (typeof parsedData === 'string') throw new Error('JSON ayrışmadı');
+            if (parsedData.isContentUnreadable) throw new Error("İçerik okunamadı.");
+            addSystemLog(`Eleştiri analizi tamamlandı: ${parsedData.videoSlides?.length || 0} sahne.`, 'success');
             return parsedData;
         } catch (e) {
-            if (e.message.includes('okunamadÃ„Â±')) throw e;
-            throw new Error(`JSON format hatasÃ„Â±: ${e.message}`);
+            if (e.message.includes('okunamadı')) throw e;
+            throw new Error(`JSON format hatası: ${e.message}`);
         }
     }
 
 
     
     static async _analyzeIddia(inputData, inputType, config) {
-        addSystemLog('Ã„Â°ddia Analizi baÃ…Å¸lÃ„Â±yor (NVIDIA)...', 'info');
-        // NVIDIA gÃƒÂ¶rsel girdiyi desteklemez
+        addSystemLog('İddia Analizi başlıyor (NVIDIA)...', 'info');
+        // NVIDIA görsel girdiyi desteklemez
         if (inputType === 'media' && Array.isArray(inputData)) {
             var descs = inputData.map(function(f) { return f.name || f.type; }).join(', ');
-            inputData = 'Medya aÃƒÂ§Ã„Â±klamasÃ„Â±: ' + descs + '. Ã„Â°ÃƒÂ§indeki doÃ„Å¸rulanabilir iddialarÃ„Â± ÃƒÂ§Ã„Â±kar.';
+            inputData = 'Medya açıklaması: ' + descs + '. İçindeki doğrulanabilir iddiaları çıkar.';
             inputType = 'prompt';
         }
 
         var parts = [];
         if (inputType === 'media') {
-            parts = [{ text: 'AÃ…Å¸aÃ„Å¸Ã„Â±daki metindeki doÃ„Å¸rulanabilir iddialarÃ„Â± ÃƒÂ§Ã„Â±kar: ' + (typeof inputData === 'string' ? inputData : '') }];
+            parts = [{ text: 'Aşağıdaki metindeki doğrulanabilir iddiaları çıkar: ' + (typeof inputData === 'string' ? inputData : '') }];
         } else if (inputType === 'prompt' || inputType === 'text') {
-            parts = [{ text: 'AÃ…Å¸aÃ„Å¸Ã„Â±daki metindeki doÃ„Å¸rulanabilir iddialarÃ„Â± ÃƒÂ§Ã„Â±kar: ' + (typeof inputData === 'string' ? inputData : '') }];
+            parts = [{ text: 'Aşağıdaki metindeki doğrulanabilir iddiaları çıkar: ' + (typeof inputData === 'string' ? inputData : '') }];
         } else if (inputType === 'url') {
             parts = [{ text: 'Bu URL icindeki icerigi arastir. Dogrulanabilir iddialari cikar: ' + inputData }];
         }
 
-        var sysPrompt = 'Sen bir fact-check ve ekonomi analiz uzmanisin. ASAGIDAKI GUNCEL VERILERI MUTLAKA KULLAN (Haziran 2026):\n\nGUNCEL EKONOMI VERILERI (Haziran 2026):\n- Aclik Siniri: 35.759 TL (dort kisilik aile, TÃƒÅ“RK-Ã„Â°Ã…Â Haziran 2026)\n- Yoksulluk Siniri: 116.478 TL (dort kisilik aile, TÃƒÅ“RK-Ã„Â°Ã…Â Haziran 2026)\n- Asgari Ucret: 28.075 TL (net, Ocak 2026)\n- En Dusuk Emekli Maasi: 23.552 TL\n- TÃƒÅ“FE Yillik: %32.11 (Haziran 2026, TÃƒÅ“Ã„Â°K)\n- TÃƒÅ“FE Aylik: %0.99 (Haziran 2026, TÃƒÅ“Ã„Â°K)\n- TCMB Yil Sonu Beklenti: %29\n- TCMB Politika Faizi: %37\n- Dolar/TL: 47.05 (16 Temmuz 2026)\n- Euro/TL: 54.07 (16 Temmuz 2026)\n- Gram Altin: 6.222 TL (16 Temmuz 2026)\n- Ceyrek Altin: 10.223 TL (16 Temmuz 2026)\n- Issizlik: %8.2\n\nNOT: Bu veriler TÃƒÅ“RK-Ã„Â°Ã…Â ve TÃƒÅ“Ã„Â°K resmi verileridir. Video iceriginde MUTLAKA bu rakamlari net olarak goster. Rakamlar buyuk puntolarla yazilsin, arka plandaki goruntunun ustunde net gorunsun. Tarih belirt: Haziran 2026.\n\nKURALLAR:\n1. Rakamlar NET ve BUYUK yazilacak (arka planda net gorunecek)\n2. TL olarak yaz (dolar degil)\n3. Tarih belirt: Haziran 2026\n4. Kaynak belirt: TÃƒÅ“RK-Ã„Â°Ã…Â, TÃƒÅ“IK\n5. Grafik varsa goster\n6. Google Search ile guncel veri bulabilirsin\n\n Gorev:\n\n1. Icerikteki DOGRULANABILIR cumleleri cikar (yorum, hakaret, kisisel gorus HARIC).\n2. Her iddiayi ayri kart yap.\n3. Her iddiayi bagimsiz analiz et.\n4. Resmi kaynaklarla karsilastir.\n5. Degerlendirme etiketi ver: Dogru, Kisman Dogru, Eksik Baglam, Yanlis, Dogrulanamiyor.\n6. Guven skoru hesapla (0-100).\n7. Kanitlari listele (kaynak + URL + veri + TARIH).\n8. Video senaryosu olustur: Hook(5sn) -> Iddia -> Aciklama -> Kanitlar -> Sonuc -> Kapanis.\n9. Kalite kontrol yap.\n\nZORUNLU EKONOMI VERILERI (video iceriginde MUTLAKA yazilacak):\n- Enflasyon: Guncel TÃƒÅ“FE (yillik %), aylik %, TARIHI ile birlikte\n- TCMB Yil Sonu Enflasyon Beklentisi: % kac, gerceklesen: % kac\n- Politika Faizi: % kac\n- Acik Siniri: XXXXX TL (TARIHI: Haziran 2026 gibi, TÃƒÅ“RK-Ã„Â°Ã…Â)\n- Yoksulluk Siniri: XXXXX TL (TARIHI ile)\n- Acik Siniri altinda kac kisi: X milyon\n- Yoksulluk siniri altinda kac kisi: X milyon\n- Asgari Ucret: XXXXX TL (net)\n- En Dusuk Emekli Maasi: XXXXX TL\n- Ortalama Memur Maasi: XXXXX TL\n- Ortalama Isci Maasi: XXXXX TL\n- Dolar/TL: XX.XX TL\n- Euro/TL: XX.XX TL\n- Gram Altin: XXXXX TL\n- Ceyrek Altin: XXXXX TL\n- Issizlik Orani: % X.X\n- Buyume (GDP): % X.X\n- Gini Katsayisi: 0.XXX\n\nKURALLAR:\n1. Tum rakamlar NET TL olarak yazilacak (orn: 26.500 TL, $ degil)\n2. Tarih belirtilecek (orn: TÃƒÅ“Ã„Â°K Haziran 2026 verilerine gore...)\n3. Eski veri kullanma, en guncel veriyi bul (en fazla 1-2 ay onceki)\n4. Enflasyon icin hem gerceklesen hem beklenti yaz\n5. Aclik/yoksulluk siniri MUTLAKA TL olarak ve tarihle birlikte yaz\n6. Kac kisi acik/yoksulluk siniri altinda MUTLAKA yaz\n7. Sayi bicimi: 26.500 TL (nokta binlik ayrac)\n8. Grafik varsa goster (enflasyon trendi, dolar kuru degisimi vb)\n9. Kaynak belirt: TÃƒÅ“Ã„Â°K, TCMB, TÃƒÅ“RK-Ã„Â°Ã…Â, OECD\n\nHer sahne NOKTA ile biten cumle olmali. Donus ZORUNLU JSON.';
+        var sysPrompt = 'Sen bir fact-check ve ekonomi analiz uzmanisin. ASAGIDAKI GUNCEL VERILERI MUTLAKA KULLAN (Haziran 2026):\n\nGUNCEL EKONOMI VERILERI (Haziran 2026):\n- Aclik Siniri: 35.759 TL (dort kisilik aile, TÜRK-İŞ Haziran 2026)\n- Yoksulluk Siniri: 116.478 TL (dort kisilik aile, TÜRK-İŞ Haziran 2026)\n- Asgari Ucret: 28.075 TL (net, Ocak 2026)\n- En Dusuk Emekli Maasi: 23.552 TL\n- TÜFE Yillik: %32.11 (Haziran 2026, TÜİK)\n- TÜFE Aylik: %0.99 (Haziran 2026, TÜİK)\n- TCMB Yil Sonu Beklenti: %29\n- TCMB Politika Faizi: %37\n- Dolar/TL: 47.05 (16 Temmuz 2026)\n- Euro/TL: 54.07 (16 Temmuz 2026)\n- Gram Altin: 6.222 TL (16 Temmuz 2026)\n- Ceyrek Altin: 10.223 TL (16 Temmuz 2026)\n- Issizlik: %8.2\n\nNOT: Bu veriler TÜRK-İŞ ve TÜİK resmi verileridir. Video iceriginde MUTLAKA bu rakamlari net olarak goster. Rakamlar buyuk puntolarla yazilsin, arka plandaki goruntunun ustunde net gorunsun. Tarih belirt: Haziran 2026.\n\nKURALLAR:\n1. Rakamlar NET ve BUYUK yazilacak (arka planda net gorunecek)\n2. TL olarak yaz (dolar degil)\n3. Tarih belirt: Haziran 2026\n4. Kaynak belirt: TÜRK-İŞ, TÜIK\n5. Grafik varsa goster\n6. Google Search ile guncel veri bulabilirsin\n\n Gorev:\n\n1. Icerikteki DOGRULANABILIR cumleleri cikar (yorum, hakaret, kisisel gorus HARIC).\n2. Her iddiayi ayri kart yap.\n3. Her iddiayi bagimsiz analiz et.\n4. Resmi kaynaklarla karsilastir.\n5. Degerlendirme etiketi ver: Dogru, Kisman Dogru, Eksik Baglam, Yanlis, Dogrulanamiyor.\n6. Guven skoru hesapla (0-100).\n7. Kanitlari listele (kaynak + URL + veri + TARIH).\n8. Video senaryosu olustur: Hook(5sn) -> Iddia -> Aciklama -> Kanitlar -> Sonuc -> Kapanis.\n9. Kalite kontrol yap.\n\nZORUNLU EKONOMI VERILERI (video iceriginde MUTLAKA yazilacak):\n- Enflasyon: Guncel TÜFE (yillik %), aylik %, TARIHI ile birlikte\n- TCMB Yil Sonu Enflasyon Beklentisi: % kac, gerceklesen: % kac\n- Politika Faizi: % kac\n- Acik Siniri: XXXXX TL (TARIHI: Haziran 2026 gibi, TÜRK-İŞ)\n- Yoksulluk Siniri: XXXXX TL (TARIHI ile)\n- Acik Siniri altinda kac kisi: X milyon\n- Yoksulluk siniri altinda kac kisi: X milyon\n- Asgari Ucret: XXXXX TL (net)\n- En Dusuk Emekli Maasi: XXXXX TL\n- Ortalama Memur Maasi: XXXXX TL\n- Ortalama Isci Maasi: XXXXX TL\n- Dolar/TL: XX.XX TL\n- Euro/TL: XX.XX TL\n- Gram Altin: XXXXX TL\n- Ceyrek Altin: XXXXX TL\n- Issizlik Orani: % X.X\n- Buyume (GDP): % X.X\n- Gini Katsayisi: 0.XXX\n\nKURALLAR:\n1. Tum rakamlar NET TL olarak yazilacak (orn: 26.500 TL, $ degil)\n2. Tarih belirtilecek (orn: TÜİK Haziran 2026 verilerine gore...)\n3. Eski veri kullanma, en guncel veriyi bul (en fazla 1-2 ay onceki)\n4. Enflasyon icin hem gerceklesen hem beklenti yaz\n5. Aclik/yoksulluk siniri MUTLAKA TL olarak ve tarihle birlikte yaz\n6. Kac kisi acik/yoksulluk siniri altinda MUTLAKA yaz\n7. Sayi bicimi: 26.500 TL (nokta binlik ayrac)\n8. Grafik varsa goster (enflasyon trendi, dolar kuru degisimi vb)\n9. Kaynak belirt: TÜİK, TCMB, TÜRK-İŞ, OECD\n\nHer sahne NOKTA ile biten cumle olmali. Donus ZORUNLU JSON.';
 
         var payload = {
             contents: [{ role: 'user', parts: parts }],
@@ -896,7 +1016,7 @@ KURALLAR:
         var userPrompt = parts.map(function(p) { return p.text; }).join('\n');
         try {
             var parsedData = await callAI(sysPrompt, userPrompt, { json: true, temperature: 0.3, max_tokens: 4096 });
-            if (typeof parsedData === 'string') throw new Error('JSON ayrÃ„Â±Ã…Å¸madÃ„Â±');
+            if (typeof parsedData === 'string') throw new Error('JSON ayrışmadı');
             if (parsedData.isContentUnreadable) throw new Error('Icerik okunamadi.');
             addSystemLog('Iddia Analizi tamamlandi: ' + (parsedData.iddialar ? parsedData.iddialar.length : 0) + ' iddia.', 'success');
             return parsedData;
@@ -910,25 +1030,25 @@ KURALLAR:
     static getGuzelSozAnalysis(quoteText) {
         // Theme detection
         var themes = {
-            'sabir': ['sabÃ„Â±r', 'bekle', 'zaman', 'dayan'],
-            'azim': ['azim', 'ÃƒÂ§aba', 'gayret', 'mÃƒÂ¼cadele', 'vazgeÃƒÂ§me'],
-            'baÃ…Å¸arÃ„Â±': ['baÃ…Å¸arÃ„Â±', 'kazan', 'hedef', 'zafer'],
-            'hayat': ['hayat', 'yaÃ…Å¸am', 'ÃƒÂ¶mÃƒÂ¼r', 'nefes'],
-            'mutluluk': ['mutluluk', 'sevinÃƒÂ§', 'neÃ…Å¸e', 'gÃƒÂ¼lÃƒÂ¼mse'],
-            'sevgi': ['sevgi', 'aÃ…Å¸k', 'kalp', 'sev'],
+            'sabir': ['sabır', 'bekle', 'zaman', 'dayan'],
+            'azim': ['azim', 'çaba', 'gayret', 'mücadele', 'vazgeçme'],
+            'başarı': ['başarı', 'kazan', 'hedef', 'zafer'],
+            'hayat': ['hayat', 'yaşam', 'ömür', 'nefes'],
+            'mutluluk': ['mutluluk', 'sevinç', 'neşe', 'gülümse'],
+            'sevgi': ['sevgi', 'aşk', 'kalp', 'sev'],
             'anne': ['anne', 'annem', 'ana'],
             'baba': ['baba', 'babam'],
-            'dostluk': ['dost', 'arkadaÃ…Å¸', 'kardeÃ…Å¸'],
-            'inanÃƒÂ§': ['inanÃƒÂ§', 'iman', 'tanrÃ„Â±', 'allah'],
+            'dostluk': ['dost', 'arkadaş', 'kardeş'],
+            'inanç': ['inanç', 'iman', 'tanrı', 'allah'],
             'umut': ['umut', 'beklenti', 'gelecek'],
-            'ÃƒÂ¶zgÃƒÂ¼rlÃƒÂ¼k': ['ÃƒÂ¶zgÃƒÂ¼rlÃƒÂ¼k', 'hÃƒÂ¼r', 'serbest'],
-            'cesaret': ['cesaret', 'korkusuz', 'yiÃ„Å¸it'],
+            'özgürlük': ['özgürlük', 'hür', 'serbest'],
+            'cesaret': ['cesaret', 'korkusuz', 'yiğit'],
             'zaman': ['zaman', 'vakit', 'dakika', 'saat'],
-            'bilgelik': ['bilgi', 'bilge', 'akÃ„Â±l', 'hikmet'],
-            'yalnÃ„Â±zlÃ„Â±k': ['yalnÃ„Â±z', 'tek', 'kimsesiz'],
-            'huzur': ['huzur', 'sÃƒÂ¼kunet', 'dingin'],
-            'Ã…Å¸ÃƒÂ¼kÃƒÂ¼r': ['Ã…Å¸ÃƒÂ¼kÃƒÂ¼r', 'minnet', 'hamd'],
-            'doÃ„Å¸a': ['doÃ„Å¸a', 'aÃ„Å¸aÃƒÂ§', 'deniz', 'gÃƒÂ¼neÃ…Å¸', 'yÃ„Â±ldÃ„Â±z']
+            'bilgelik': ['bilgi', 'bilge', 'akıl', 'hikmet'],
+            'yalnızlık': ['yalnız', 'tek', 'kimsesiz'],
+            'huzur': ['huzur', 'sükunet', 'dingin'],
+            'şükür': ['şükür', 'minnet', 'hamd'],
+            'doğa': ['doğa', 'ağaç', 'deniz', 'güneş', 'yıldız']
         };
         
         var detectedTheme = 'hayat';
@@ -948,15 +1068,15 @@ KURALLAR:
         
         // Emotion detection
         var emotions = {
-            'hÃƒÂ¼zÃƒÂ¼n': ['hÃƒÂ¼zÃƒÂ¼n', 'acÃ„Â±', 'gÃƒÂ¶zyaÃ…Å¸Ã„Â±', 'aÃ„Å¸la', 'keder'],
+            'hüzün': ['hüzün', 'acı', 'gözyaşı', 'ağla', 'keder'],
             'umut': ['umut', 'bekle', 'gelecek', 'iyi'],
-            'aÃ…Å¸k': ['aÃ…Å¸k', 'sevgi', 'kalp', 'sev'],
-            'nefret': ['nefret', 'kin', 'ÃƒÂ¶fke'],
+            'aşk': ['aşk', 'sevgi', 'kalp', 'sev'],
+            'nefret': ['nefret', 'kin', 'öfke'],
             'korku': ['korku', 'kork', 'tehlike'],
-            'sevinÃƒÂ§': ['sevinÃƒÂ§', 'mutlu', 'gÃƒÂ¼l', 'neÃ…Å¸e'],
-            'ÃƒÂ¶fke': ['ÃƒÂ¶fke', 'kÃ„Â±z', 'sinir'],
-            'gurur': ['gurur', 'onur', 'Ã…Å¸eref'],
-            'ÃƒÂ¶zlem': ['ÃƒÂ¶zlem', 'hasret', 'bekle']
+            'sevinç': ['sevinç', 'mutlu', 'gül', 'neşe'],
+            'öfke': ['öfke', 'kız', 'sinir'],
+            'gurur': ['gurur', 'onur', 'şeref'],
+            'özlem': ['özlem', 'hasret', 'bekle']
         };
         
         var detectedEmotion = 'umut';
@@ -974,10 +1094,10 @@ KURALLAR:
         
         // Style detection based on theme
         var styleMap = {
-            'sabir': 'minimal', 'azim': 'dark', 'baÃ…Å¸arÃ„Â±': 'luxury',
+            'sabir': 'minimal', 'azim': 'dark', 'başarı': 'luxury',
             'hayat': 'nature', 'mutluluk': 'warm', 'sevgi': 'romantic',
             'umut': 'light', 'cesaret': 'epik', 'bilgelik': 'vintage',
-            'yalnÃ„Â±zlÃ„Â±k': 'film_noir', 'huzur': 'nature', 'doÃ„Å¸a': 'nature',
+            'yalnızlık': 'film_noir', 'huzur': 'nature', 'doğa': 'nature',
             'zaman': 'minimal', 'inanc': 'spiritual', 'dostluk': 'warm'
         };
         
@@ -985,11 +1105,11 @@ KURALLAR:
         
         // Music selection
         var musicMap = {
-            'sabir': 'soft piano', 'azim': 'motivational', 'baÃ…Å¸arÃ„Â±': 'cinematic orchestral',
+            'sabir': 'soft piano', 'azim': 'motivational', 'başarı': 'cinematic orchestral',
             'hayat': 'contemplative piano', 'mutluluk': 'upbeat', 'sevgi': 'romantic piano',
             'anne': 'warm orchestral', 'baba': 'strong strings', 'umut': 'soft piano',
-            'cesaret': 'epic cinematic', 'doÃ„Å¸a': 'nature sounds', 'bilgelik': 'meditation',
-            'yalnÃ„Â±zlÃ„Â±k': 'melancholic piano', 'huzur': 'ambient', 'Ã…Å¸ÃƒÂ¼kÃƒÂ¼r': 'light strings',
+            'cesaret': 'epic cinematic', 'doğa': 'nature sounds', 'bilgelik': 'meditation',
+            'yalnızlık': 'melancholic piano', 'huzur': 'ambient', 'şükür': 'light strings',
             'zaman': 'minimal piano', 'inanc': 'spiritual ambient', 'dostluk': 'warm acoustic'
         };
         
@@ -999,12 +1119,12 @@ KURALLAR:
         var paletteMap = {
             'sabir': { ana: '#2c3e50', ikincil: '#34495e', vurgu: '#3498db', yazi: '#ecf0f1', arka: '#1a252f' },
             'azim': { ana: '#1a1a2e', ikincil: '#16213e', vurgu: '#e94560', yazi: '#ffffff', arka: '#0f0f23' },
-            'baÃ…Å¸arÃ„Â±': { ana: '#2d1b69', ikincil: '#11001c', vurgu: '#ffd700', yazi: '#ffffff', arka: '#0a0015' },
+            'başarı': { ana: '#2d1b69', ikincil: '#11001c', vurgu: '#ffd700', yazi: '#ffffff', arka: '#0a0015' },
             'hayat': { ana: '#1b4332', ikincil: '#2d6a4f', vurgu: '#95d5b2', yazi: '#ffffff', arka: '#081c15' },
             'sevgi': { ana: '#4a0e0e', ikincil: '#6b1d1d', vurgu: '#ff6b6b', yazi: '#ffffff', arka: '#1a0505' },
             'umut': { ana: '#1a365d', ikincil: '#2a4a7f', vurgu: '#63b3ed', yazi: '#ffffff', arka: '#0f1f3d' },
-            'hÃƒÂ¼zÃƒÂ¼n': { ana: '#2d3748', ikincil: '#4a5568', vurgu: '#a0aec0', yazi: '#e2e8f0', arka: '#1a202c' },
-            'doÃ„Å¸a': { ana: '#22543d', ikincil: '#276749', vurgu: '#68d391', yazi: '#ffffff', arka: '#1a3a2a' },
+            'hüzün': { ana: '#2d3748', ikincil: '#4a5568', vurgu: '#a0aec0', yazi: '#e2e8f0', arka: '#1a202c' },
+            'doğa': { ana: '#22543d', ikincil: '#276749', vurgu: '#68d391', yazi: '#ffffff', arka: '#1a3a2a' },
         };
         
         var palette = paletteMap[detectedTheme] || { ana: '#1a1a2e', ikincil: '#16213e', vurgu: '#e94560', yazi: '#ffffff', arka: '#0f0f23' };
@@ -1015,8 +1135,8 @@ KURALLAR:
             stil: detectedStyle,
             muzik: suggestedMusic,
             palet: palette,
-            enerji: detectedEmotion === 'cesaret' || detectedEmotion === 'ÃƒÂ¶fke' ? 80 : 40,
-            pozitiflik: detectedEmotion === 'umut' || detectedEmotion === 'sevinÃƒÂ§' ? 80 : 50
+            enerji: detectedEmotion === 'cesaret' || detectedEmotion === 'öfke' ? 80 : 40,
+            pozitiflik: detectedEmotion === 'umut' || detectedEmotion === 'sevinç' ? 80 : 50
         };
     }
 
@@ -1033,10 +1153,10 @@ KURALLAR:
     }
 
 static async _buildGuzelSozScript(inputData, inputType, config) {
-        // Felsefi video formÃƒÂ¼lÃƒÂ¼: HOOK Ã¢â€ â€™ LEAD Ã¢â€ â€™ DÃƒÅ“Ã…ÂÃƒÅ“NÃƒÅ“R SÃƒâ€“ZLERÃ„Â° Ã¢â€ â€™ CTA Ã¢â€ â€™ HASHTAGS
+        // Felsefi video formülü: HOOK → LEAD → DÜŞÜNÜR SÖZLERİ → CTA → HASHTAGS
         let topicText = "";
 
-        // Metin ÃƒÂ§Ã„Â±karma Ã¢â‚¬â€ girdi tÃƒÂ¼rÃƒÂ¼ne gÃƒÂ¶re
+        // Metin çıkarma — girdi türüne göre
         if (typeof inputData === 'string') {
             topicText = inputData.trim();
             addSystemLog(`Metin girdisi: ${topicText.length} karakter`, 'info');
@@ -1044,7 +1164,7 @@ static async _buildGuzelSozScript(inputData, inputType, config) {
             const videoFile = inputData.find(f => f.type?.startsWith('video/'));
             const imageFile = inputData.find(f => f.type?.startsWith('image/'));
 
-            // OCR yardÃ„Â±mcÃ„Â± fonksiyonlarÃ„Â±
+            // OCR yardımcı fonksiyonları
             const splitIntoStrips = (srcB64, stripCount) => new Promise((resolve) => {
                 const img = new Image(); img.crossOrigin = "Anonymous";
                 img.onload = () => {
@@ -1061,17 +1181,17 @@ static async _buildGuzelSozScript(inputData, inputType, config) {
                 img.src = 'data:image/jpeg;base64,' + srcB64;
             });
 
-            // NVIDIA ÃƒÂ¼cretsiz chat API'si gÃƒÂ¶rsel girdiyi desteklemez; OCR yapÃ„Â±lamaz.
-            // Bu fonksiyon gÃƒÂ¶rsel tabanlÃ„Â± metin ÃƒÂ§Ã„Â±karamaz, boÃ…Å¸ dÃƒÂ¶ner (fallback devreye girer).
+            // NVIDIA ücretsiz chat API'si görsel girdiyi desteklemez; OCR yapılamaz.
+            // Bu fonksiyon görsel tabanlı metin çıkaramaz, boş döner (fallback devreye girer).
             const runOcr = async (b64Data) => {
-                addSystemLog('GÃƒÂ¶rsel OCR NVIDIA ile desteklenmiyor; metin ÃƒÂ§Ã„Â±karÃ„Â±lmayacak.', 'warn');
+                addSystemLog('Görsel OCR NVIDIA ile desteklenmiyor; metin çıkarılmayacak.', 'warn');
                 return "";
             };
 
             const _unusedOcrModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest'];
 
             if (videoFile) {
-                addSystemLog('Video karesi ÃƒÂ§Ã„Â±karÃ„Â±lÃ„Â±yor...', 'info');
+                addSystemLog('Video karesi çıkarılıyor...', 'info');
                 const frameB64 = await new Promise((resolve) => {
                     const video = document.createElement('video'); video.muted = true; video.playsInline = true;
                     const raw = videoFile.data.includes(',') ? videoFile.data.split(',')[1] : videoFile.data;
@@ -1090,55 +1210,55 @@ static async _buildGuzelSozScript(inputData, inputType, config) {
                     setTimeout(() => { URL.revokeObjectURL(video.src); resolve(null); }, 10000);
                 });
                 if (frameB64) topicText = await runOcr(frameB64) || "";
-                if (!topicText) topicText = videoFile.name?.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '') || "Ãƒâ€“zgÃƒÂ¼rlÃƒÂ¼k";
+                if (!topicText) topicText = videoFile.name?.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '') || "Özgürlük";
             } else if (imageFile) {
-                addSystemLog('GÃƒÂ¶rsel OCR baÃ…Å¸lÃ„Â±yor...', 'info');
+                addSystemLog('Görsel OCR başlıyor...', 'info');
                 const b64Data = imageFile.data.split(',')[1] || imageFile.data;
                 topicText = await runOcr(b64Data) || "";
                 if (!topicText) topicText = imageFile.name.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '') || "Adalet";
             } else {
-                topicText = inputData[0].name?.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '') || "HayatÃ„Â±n anlamÃ„Â±";
+                topicText = inputData[0].name?.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '') || "Hayatın anlamı";
             }
         }
 
-        // OCR hata mesajlarÃ„Â±nÃ„Â± filtrele
-        const errorPatterns = [/gÃƒÂ¶rselde\s+(herhangi\s+)?bir\s+metin\s+bulunmamaktadÃ„Â±r/i, /bu\s+gÃƒÂ¶rselde\s+metin\s+yok/i, /no\s+text\s+found/i, /gÃƒÂ¶rselde\s+yazÃ„Â±\s+bulunamadÃ„Â±/i, /metin\s+bulunamadÃ„Â±/i, /cannot\s+(read|find|detect)\s+text/i, /ocr\s+(failed|error|baÃ…Å¸arÃ„Â±sÃ„Â±z)/i];
+        // OCR hata mesajlarını filtrele
+        const errorPatterns = [/görselde\s+(herhangi\s+)?bir\s+metin\s+bulunmamaktadır/i, /bu\s+görselde\s+metin\s+yok/i, /no\s+text\s+found/i, /görselde\s+yazı\s+bulunamadı/i, /metin\s+bulunamadı/i, /cannot\s+(read|find|detect)\s+text/i, /ocr\s+(failed|error|başarısız)/i];
         if (errorPatterns.some(p => p.test(topicText))) {
             if (inputType === 'media' && Array.isArray(inputData) && inputData[0]?.name) topicText = inputData[0].name.replace(/[_-]/g, ' ').replace(/\.[^.]+$/, '');
-            else topicText = "HayatÃ„Â±n anlamÃ„Â±";
-            addSystemLog('OCR hata mesajÃ„Â± filtrelendi, dosya adÃ„Â± kullanÃ„Â±ldÃ„Â±.', 'warn');
+            else topicText = "Hayatın anlamı";
+            addSystemLog('OCR hata mesajı filtrelendi, dosya adı kullanıldı.', 'warn');
         }
-        if (!topicText || topicText.length < 3) topicText = "HayatÃ„Â±n anlamÃ„Â±";
+        if (!topicText || topicText.length < 3) topicText = "Hayatın anlamı";
         addSystemLog(`Konu: "${topicText.substring(0, 80)}..."`, 'info');
 
-        // Gemini'ya felsefi senaryo prompt'u gÃƒÂ¶nder
-        const philosopherPrompt = `Sen felsefe, etik, siyaset bilimi, kitle psikolojisi ve kiÃ…Å¸isel geliÃ…Å¸im konularÃ„Â±nda uzman, dijital dÃƒÂ¼nyada (TikTok/Reels) geniÃ…Å¸ kitlelere hitap eden profesyonel bir iÃƒÂ§erik ÃƒÂ¼reticisisin.
+        // Gemini'ya felsefi senaryo prompt'u gönder
+        const philosopherPrompt = `Sen felsefe, etik, siyaset bilimi, kitle psikolojisi ve kişisel gelişim konularında uzman, dijital dünyada (TikTok/Reels) geniş kitlelere hitap eden profesyonel bir içerik üreticisisin.
 
-Konu baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±: "${topicText}"
+Konu başlığı: "${topicText}"
 
-AÃ…Å¸aÃ„Å¸Ã„Â±daki yapÃ„Â±ya KESÃ„Â°NLÃ„Â°KLE sadÃ„Â±k kalarak bir video senaryosu ÃƒÂ¼ret:
+Aşağıdaki yapıya KESİNLİKLE sadık kalarak bir video senaryosu üret:
 
-1. VURUCU BAÃ…ÂLIK (hook): Ã„Â°lk 3 saniyede izleyicinin dikkatini ÃƒÂ§ekecek, kÃ„Â±Ã…Å¸kÃ„Â±rtÃ„Â±cÃ„Â±, merak uyandÃ„Â±rÃ„Â±cÃ„Â± ve sorgulayÃ„Â±cÃ„Â± bir baÃ…Å¸lÃ„Â±k. "Adalet GÃƒÂ¼ÃƒÂ§lÃƒÂ¼ler Ã„Â°ÃƒÂ§in Mi Ãƒâ€¡alÃ„Â±Ã…Å¸Ã„Â±yor?" veya "Bir DiktatÃƒÂ¶rÃƒÂ¼n 7 Ã„Â°Ã…Å¸areti" gibi.
+1. VURUCU BAŞLIK (hook): İlk 3 saniyede izleyicinin dikkatini çekecek, kışkırtıcı, merak uyandırıcı ve sorgulayıcı bir başlık. "Adalet Güçlüler İçin Mi Çalışıyor?" veya "Bir Diktatörün 7 İşareti" gibi.
 
-2. GÃ„Â°RÃ„Â°Ã…Â (lead): Konunun ÃƒÂ¶zÃƒÂ¼nÃƒÂ¼, toplum veya birey ÃƒÂ¼zerindeki etkisini anlatan 1-2 cÃƒÂ¼mlelik gÃƒÂ¼ÃƒÂ§lÃƒÂ¼ bir giriÃ…Å¸.
+2. GİRİŞ (lead): Konunun özünü, toplum veya birey üzerindeki etkisini anlatan 1-2 cümlelik güçlü bir giriş.
 
-3. DÃƒÅ“Ã…ÂÃƒÅ“NÃƒÅ“R SÃƒâ€“ZLERÃ„Â° (quotes): Konuyla doÃ„Å¸rudan iliÃ…Å¸kili, tarihe yÃƒÂ¶n vermiÃ…Å¸ en az 3, en fazla 4 farklÃ„Â± filozof/dÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼rÃƒÂ¼n (Locke, Tocqueville, Mill, Sokrates, Platon, Nietzsche, Epiktetos, Ã„Â°bn Haldun, Machiavelli, Hannah Arendt, vb.) ÃƒÂ§arpÃ„Â±cÃ„Â± sÃƒÂ¶zlerini listele. Her dÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼r iÃƒÂ§in:
-   - name: DÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼rÃƒÂ¼n adÃ„Â±
-   - quote: SÃƒÂ¶zÃƒÂ¼ (TÃƒÂ¼rkÃƒÂ§e, 1-2 cÃƒÂ¼mle)
-   - emphasis: SÃƒÂ¶zÃƒÂ¼n taÃ…Å¸Ã„Â±dÃ„Â±Ã„Å¸Ã„Â± derin anlamÃ„Â± aÃƒÂ§Ã„Â±klayan kÃ„Â±sa vurgu (1 cÃƒÂ¼mle)
+3. DÜŞÜNÜR SÖZLERİ (quotes): Konuyla doğrudan ilişkili, tarihe yön vermiş en az 3, en fazla 4 farklı filozof/düşünürün (Locke, Tocqueville, Mill, Sokrates, Platon, Nietzsche, Epiktetos, İbn Haldun, Machiavelli, Hannah Arendt, vb.) çarpıcı sözlerini listele. Her düşünür için:
+   - name: Düşünürün adı
+   - quote: Sözü (Türkçe, 1-2 cümle)
+   - emphasis: Sözün taşıdığı derin anlamı açıklayan kısa vurgu (1 cümle)
 
-4. KAPANIÃ…Â (cta): Ã„Â°zleyiciyi yorum yapmaya davet eden derin, ucu aÃƒÂ§Ã„Â±k bir soru.
+4. KAPANIŞ (cta): İzleyiciyi yorum yapmaya davet eden derin, ucu açık bir soru.
 
-5. ETÃ„Â°KETLER: En az 8 hashtag ve 5 anahtar kelime (SEO uyumlu).
+5. ETİKETLER: En az 8 hashtag ve 5 anahtar kelime (SEO uyumlu).
 
-Dil ve ton: Ciddi, entelektÃƒÂ¼el, eleÃ…Å¸tirel, nesnel ama provokatif ve akÃ„Â±cÃ„Â±. SÃƒÂ¼slÃƒÂ¼ ve gereksiz uzun cÃƒÂ¼mlelerden kaÃƒÂ§Ã„Â±n; mesajÃ„Â± net ve vurucu ver. BÃƒÅ“TÃƒÅ“N METÃ„Â°N TÃƒÅ“RKÃƒâ€¡E OLMALI.
+Dil ve ton: Ciddi, entelektüel, eleştirel, nesnel ama provokatif ve akıcı. Süslü ve gereksiz uzun cümlelerden kaçın; mesajı net ve vurucu ver. BÜTÜN METİN TÜRKÇE OLMALI.
 
-JSON formatÃ„Â±nda dÃƒÂ¶n.`;
+JSON formatında dön.`;
 
-        addSystemLog('NVIDIA felsefi senaryo ÃƒÂ¼retiliyor...', 'info');
+        addSystemLog('NVIDIA felsefi senaryo üretiliyor...', 'info');
         let hook = "", lead = "", quotes = [], cta = "", hashtags = [], keywords = [];
         try {
-            const parsed = await callAI('Sen bir felsefe iÃƒÂ§erik uzmanÃ„Â±sÃ„Â±n. YanÃ„Â±tÃ„Â±nÃ„Â± geÃƒÂ§erli JSON olarak ver.', philosopherPrompt, { json: true, temperature: 0.85, max_tokens: 2048 });
+            const parsed = await callAI('Sen bir felsefe içerik uzmanısın. Yanıtını geçerli JSON olarak ver.', philosopherPrompt, { json: true, temperature: 0.85, max_tokens: 2048 });
             if (typeof parsed !== 'string') {
                 hook = parsed.hook || "";
                 lead = parsed.lead || "";
@@ -1146,26 +1266,26 @@ JSON formatÃ„Â±nda dÃƒÂ¶n.`;
                 cta = parsed.cta || "";
                 hashtags = parsed.hashtags || [];
                 keywords = parsed.keywords || [];
-                addSystemLog(`Ã¢Å“â€œ Senaryo ÃƒÂ¼retildi: ${quotes.length} dÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼r, ${hashtags.length} etiket`, 'success');
+                addSystemLog(`✓ Senaryo üretildi: ${quotes.length} düşünür, ${hashtags.length} etiket`, 'success');
             }
-        } catch (e) { addSystemLog(`NVIDIA senaryo hatasÃ„Â±: ${e.message}`, 'warn'); }
+        } catch (e) { addSystemLog(`NVIDIA senaryo hatası: ${e.message}`, 'warn'); }
 
-        // Fallback Ã¢â‚¬â€ AI yanÃ„Â±t vermezse
+        // Fallback — AI yanıt vermezse
         if (!hook) {
-            hook = `${topicText} ÃƒÅ“zerine DÃƒÂ¼Ã…Å¸ÃƒÂ¼ndÃƒÂ¼rÃƒÂ¼cÃƒÂ¼ Bir Yolculuk`;
-            lead = `Bu konu, yÃƒÂ¼zyÃ„Â±llardÃ„Â±r filozoflarÃ„Â±n kafasÃ„Â±nÃ„Â± kurcalayan temel bir soru. Peki bugÃƒÂ¼n ne kadar geÃƒÂ§erli?`;
+            hook = `${topicText} Üzerine Düşündürücü Bir Yolculuk`;
+            lead = `Bu konu, yüzyıllardır filozofların kafasını kurcalayan temel bir soru. Peki bugün ne kadar geçerli?`;
             quotes = [
-                { name: "Sokrates", quote: "SorgulanmamÃ„Â±Ã…Å¸ bir hayat, yaÃ…Å¸anmaya deÃ„Å¸mez.", emphasis: "Sorgulama cesareti olmadan gerÃƒÂ§ek bilgiye ulaÃ…Å¸Ã„Â±lamaz." },
-                { name: "Platon", quote: "Adaletsiz bir dÃƒÂ¼zen, en bÃƒÂ¼yÃƒÂ¼k suÃƒÂ§tur.", emphasis: "GÃƒÂ¼ÃƒÂ§lÃƒÂ¼ olanÃ„Â±n adaleti tanÃ„Â±mlamasÃ„Â±, adaletsizliÃ„Å¸in kendisidir." },
-                { name: "Nietzsche", quote: "Uzun sÃƒÂ¼re uÃƒÂ§uruma bakan, uÃƒÂ§urumun da ona bacaÃ„Å¸Ã„Â±nÃ„Â± unutmamalÃ„Â±.", emphasis: "KÃƒÂ¶tÃƒÂ¼lÃƒÂ¼Ã„Å¸ÃƒÂ¼ incelerken, onun bir parÃƒÂ§asÃ„Â± olma tehlikesi her zaman vardÃ„Â±r." }
+                { name: "Sokrates", quote: "Sorgulanmamış bir hayat, yaşanmaya değmez.", emphasis: "Sorgulama cesareti olmadan gerçek bilgiye ulaşılamaz." },
+                { name: "Platon", quote: "Adaletsiz bir düzen, en büyük suçtur.", emphasis: "Güçlü olanın adaleti tanımlaması, adaletsizliğin kendisidir." },
+                { name: "Nietzsche", quote: "Uzun süre uçuruma bakan, uçurumun da ona bacağını unutmamalı.", emphasis: "Kötülüğü incelerken, onun bir parçası olma tehlikesi her zaman vardır." }
             ];
-            cta = `Sizce bu konu gÃƒÂ¼nÃƒÂ¼mÃƒÂ¼z dÃƒÂ¼nyasÃ„Â±nda ne kadar geÃƒÂ§erli? GÃƒÂ¶rÃƒÂ¼Ã…Å¸lerinizi yorumlarda paylaÃ…Å¸Ã„Â±n.`;
-            hashtags = ['#felsefe', '#dÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼rler', '#sokrates', '#platon', '#nietzsche', '#adalet', '#ÃƒÂ¶zgÃƒÂ¼rlÃƒÂ¼k', '#dÃƒÂ¼Ã…Å¸ÃƒÂ¼ndÃƒÂ¼rÃƒÂ¼cÃƒÂ¼', '#entelijansiya', '#tiktokfelsefe'];
-            keywords = ['felsefe', 'dÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼rler', 'adalet', 'ÃƒÂ¶zgÃƒÂ¼rlÃƒÂ¼k', 'toplum'];
-            addSystemLog('Fallback senaryo kullanÃ„Â±ldÃ„Â±.', 'warn');
+            cta = `Sizce bu konu günümüz dünyasında ne kadar geçerli? Görüşlerinizi yorumlarda paylaşın.`;
+            hashtags = ['#felsefe', '#düşünürler', '#sokrates', '#platon', '#nietzsche', '#adalet', '#özgürlük', '#düşündürücü', '#entelijansiya', '#tiktokfelsefe'];
+            keywords = ['felsefe', 'düşünürler', 'adalet', 'özgürlük', 'toplum'];
+            addSystemLog('Fallback senaryo kullanıldı.', 'warn');
         }
 
-        // GÃƒÂ¶rsel promptlarÃ„Â± ÃƒÂ¼ret Ã¢â‚¬â€ her sahne iÃƒÂ§in
+        // Görsel promptları üret — her sahne için
         const imagePromptBase = [
             `A dramatic cinematic scene representing: ${hook}. Dark moody lighting, thought-provoking atmosphere, symbolic composition.`,
             `An intellectual scene with books, ancient columns, and soft golden light representing wisdom and knowledge.`,
@@ -1174,20 +1294,20 @@ JSON formatÃ„Â±nda dÃƒÂ¶n.`;
         ];
 
         const videoSlides = [];
-        // Slide 0: HOOK Ã¢â‚¬â€ KÃ„Â±Ã…Å¸kÃ„Â±rtÃ„Â±cÃ„Â± baÃ…Å¸lÃ„Â±k
+        // Slide 0: HOOK — Kışkırtıcı başlık
         videoSlides.push({ _slideType: 'HOOK', topText: hook, spokenText: hook, imagePrompts: [imagePromptBase[0]] });
-        // Slide 1: LEAD Ã¢â‚¬â€ KÃ„Â±sa giriÃ…Å¸
+        // Slide 1: LEAD — Kısa giriş
         videoSlides.push({ _slideType: 'LEAD', topText: '', spokenText: lead, imagePrompts: [imagePromptBase[1]] });
-        // Slide 2-N: DÃƒÅ“Ã…ÂÃƒÅ“NÃƒÅ“R SÃƒâ€“ZLERÃ„Â°
+        // Slide 2-N: DÜŞÜNÜR SÖZLERİ
         quotes.forEach((q, i) => {
-            videoSlides.push({ _slideType: 'QUOTE', topText: q.name, spokenText: `${q.name} Ã…Å¸ÃƒÂ¶yle demiÃ…Å¸: ${q.quote} ${q.emphasis || ''}`, imagePrompts: [imagePromptBase[i + 2] || imagePromptBase[1]], _emphasis: q.emphasis || '', _quoteText: q.quote });
+            videoSlides.push({ _slideType: 'QUOTE', topText: q.name, spokenText: `${q.name} şöyle demiş: ${q.quote} ${q.emphasis || ''}`, imagePrompts: [imagePromptBase[i + 2] || imagePromptBase[1]], _emphasis: q.emphasis || '', _quoteText: q.quote });
         });
-        // Slide N+1: CTA Ã¢â‚¬â€ EtkileÃ…Å¸im ÃƒÂ§aÃ„Å¸rÃ„Â±sÃ„Â±
+        // Slide N+1: CTA — Etkileşim çağrısı
         const hashtagStr = hashtags.slice(0, 10).map(h => h.startsWith('#') ? h : '#' + h).join(' ');
         videoSlides.push({ _slideType: 'CTA', topText: '', spokenText: cta, imagePrompts: [imagePromptBase[imagePromptBase.length - 1]], _hashtags: hashtagStr });
 
-        // AtatÃƒÂ¼rk tespiti
-        const ataturkKeywords = ['atatÃƒÂ¼rk', 'mustafa kemal', 'samsun', 'kurtuluÃ…Å¸', 'cumhuriyet', 'baÃ„Å¸Ã„Â±msÃ„Â±zlÃ„Â±k', 'milli mÃƒÂ¼cadele'];
+        // Atatürk tespiti
+        const ataturkKeywords = ['atatürk', 'mustafa kemal', 'samsun', 'kurtuluş', 'cumhuriyet', 'bağımsızlık', 'milli mücadele'];
         const fullText = (hook + ' ' + lead + ' ' + quotes.map(q => q.quote).join(' ')).toLowerCase();
         const isAtaturkRelated = ataturkKeywords.some(kw => fullText.includes(kw));
 
@@ -1201,7 +1321,7 @@ JSON formatÃ„Â±nda dÃƒÂ¶n.`;
             tiktokTitle: hook.substring(0, 60),
             tiktokDescription: lead,
             tiktokHashtags: hashtags.slice(0, 10).map(h => h.startsWith('#') ? h : '#' + h),
-            _suggestedMusic: isAtaturkRelated ? (LOCAL_MUSIC_LIBRARY.find(m => /ataturk|istiklal|istiklal mars|vatan|cumhuriyet/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id) || null) : null,
+            _suggestedMusic: isAtaturkRelated ? (LOCAL_MUSIC_LIBRARY.find(m => /ataturk|istiklal|samsun|cumhuriyet|vatan/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id) || null) : null,
             _isAtaturkRelated: isAtaturkRelated,
             _realImageUrls: [],
             mediaBlackout: { show: false, percentageCovered: 0, percentageIgnored: 0, mediaNames: [], explanation: "" },
@@ -1234,7 +1354,7 @@ class MediaSynthesisService {
         const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 1024; const ctx = canvas.getContext('2d');
         const colorMap = {
             'mutlu': { bg1: '#fbbf24', bg2: '#f59e0b', accent: '#fcd34d', glow: '#fef3c7' },
-            'hÃƒÂ¼zÃƒÂ¼nlÃƒÂ¼': { bg1: '#3b82f6', bg2: '#1d4ed8', accent: '#93c5fd', glow: '#dbeafe' },
+            'hüzünlü': { bg1: '#3b82f6', bg2: '#1d4ed8', accent: '#93c5fd', glow: '#dbeafe' },
             'romantik': { bg1: '#ec4899', bg2: '#be185d', accent: '#f9a8d4', glow: '#fce7f3' },
             'notr': { bg1: '#6366f1', bg2: '#4338ca', accent: '#a5b4fc', glow: '#e0e7ff' }
         };
@@ -1280,16 +1400,16 @@ class MediaSynthesisService {
 
         const contextLabel = isGuzelSoz ? 'quote illustration' : 'news context';
         const fullPrompt = `${stylePrefix}, ${contextLabel}: ${prompt}. Safe, no text, no violence.`;
-        addSystemLog(`GÃƒÂ¶rsel aranÃ„Â±yor: "${prompt.substring(0, 40)}..."`, 'info');
-        // 1. Wikimedia Commons'tan gerÃƒÂ§ek gÃƒÂ¶rsel ÃƒÂ§ek (ÃƒÂ¼cretsiz, telifsiz)
+        addSystemLog(`Görsel aranıyor: "${prompt.substring(0, 40)}..."`, 'info');
+        // 1. Wikimedia Commons'tan gerçek görsel çek (ücretsiz, telifsiz)
         try {
             const images = await fetchWikimediaImages(prompt, 3);
             if (images && images.length > 0) {
-                addSystemLog(`Wikimedia'dan ${images.length} gÃƒÂ¶rsel bulundu.`, 'success');
+                addSystemLog(`Wikimedia'dan ${images.length} görsel bulundu.`, 'success');
                 return images[0];
             }
-        } catch (err) { addSystemLog('Wikimedia gÃƒÂ¶rsel aramasÃ„Â± baÃ…Å¸arÃ„Â±sÃ„Â±z: ' + err.message, 'warn'); }
-        // 2. Gemini ÃƒÂ¼cretsiz model ile gÃƒÂ¶rsel ÃƒÂ¼ret (ayrÃ„Â± Gemini key varsa)
+        } catch (err) { addSystemLog('Wikimedia görsel araması başarısız: ' + err.message, 'warn'); }
+        // 2. Gemini ücretsiz model ile görsel üret (ayrı Gemini key varsa)
         try {
             const key = getGeminiKey();
             if (key) {
@@ -1302,15 +1422,15 @@ class MediaSynthesisService {
                         if (r.ok) {
                             const d = await r.json();
                             const base64 = d.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
-                            if (base64) { addSystemLog(`Gemini (${model}) ile gÃƒÂ¶rsel ÃƒÂ¼retildi.`, 'success'); return `data:image/jpeg;base64,${base64}`; }
+                            if (base64) { addSystemLog(`Gemini (${model}) ile görsel üretildi.`, 'success'); return `data:image/jpeg;base64,${base64}`; }
                         }
                     } catch (e) {}
                 }
             }
-        } catch (err) { addSystemLog('Gemini gÃƒÂ¶rsel ÃƒÂ¼retimi baÃ…Å¸arÃ„Â±sÃ„Â±z: ' + err.message, 'warn'); }
+        } catch (err) { addSystemLog('Gemini görsel üretimi başarısız: ' + err.message, 'warn'); }
         // 3. Procedural fallback
         if (isGuzelSoz && quoteText) {
-            addSystemLog('Quote uyumlu fallback gÃƒÂ¶rsel ÃƒÂ¼retiliyor...', 'warn');
+            addSystemLog('Quote uyumlu fallback görsel üretiliyor...', 'warn');
             return this.generateQuoteFallback(quoteText, emotion);
         }
         return this.generateProceduralFallback(prompt, imageStyle);
@@ -1318,12 +1438,12 @@ class MediaSynthesisService {
 
     static async generateAudio(text, voice) {
         if (!text || voice === 'none') return null;
-        // Metni temizle Ã¢â‚¬â€ TÃƒÂ¼rkÃƒÂ§e karakterler korunur, sadece sorunlu iÃ…Å¸aretler kaldÃ„Â±rÃ„Â±lÃ„Â±r
+        // Metni temizle — Türkçe karakterler korunur, sadece sorunlu işaretler kaldırılır
         let cleanText = text.replace(/[*_#"']/g, '').replace(/\.\.\./g, ', ').replace(/\n/g, ' ').replace(/[:;/\\|{}[\]<>^~`]/g, ', ').replace(/\s+/g, ' ').trim();
         if (cleanText.length < 2) return null;
         const estDuration = Math.max(2.0, (cleanText.split(/\s+/).length / 2.5));
 
-        // 1. Gemini ÃƒÂ¼cretsiz TTS (ayrÃ„Â± Gemini key varsa) Ã¢â‚¬â€ gerÃƒÂ§ek WAV ses dÃƒÂ¶ndÃƒÂ¼rÃƒÂ¼r
+        // 1. Gemini ücretsiz TTS (ayrı Gemini key varsa) — gerçek WAV ses döndürür
         const key = getGeminiKey();
         if (key) {
             try {
@@ -1341,15 +1461,15 @@ class MediaSynthesisService {
                         const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
                         ws(0, 'RIFF'); v.setUint32(4, 36 + pcm.length, true); ws(8, 'WAVE'); ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); ws(36, 'data'); v.setUint32(40, pcm.length, true);
                         new Uint8Array(wav, 44).set(pcm);
-                        addSystemLog(`Seslendirme Gemini TTS ile ÃƒÂ¼retildi.`, 'success');
+                        addSystemLog(`Seslendirme Gemini TTS ile üretildi.`, 'success');
                         return { wavBuffer: wav, sampleRate };
                     }
                 }
-            } catch (e) { addSystemLog('Gemini TTS baÃ…Å¸arÃ„Â±sÃ„Â±z, Web Speech\'e dÃƒÂ¼Ã…Å¸ÃƒÂ¼lÃƒÂ¼yor: ' + e.message, 'warn'); }
+            } catch (e) { addSystemLog('Gemini TTS başarısız, Web Speech\'e düşülüyor: ' + e.message, 'warn'); }
         }
 
-        // 2. Fallback: Web Speech API (tarayÃ„Â±cÃ„Â±da ÃƒÂ§alÃ„Â±nÃ„Â±r, WAV yok)
-        addSystemLog(`Seslendirme Web Speech API ile yapÃ„Â±lacak (${estDuration.toFixed(1)}sn tahmini): "${cleanText.substring(0, 40)}..."`, 'info');
+        // 2. Fallback: Web Speech API (tarayıcıda çalınır, WAV yok)
+        addSystemLog(`Seslendirme Web Speech API ile yapılacak (${estDuration.toFixed(1)}sn tahmini): "${cleanText.substring(0, 40)}..."`, 'info');
         return {
             wavBuffer: null,
             sampleRate: 24000,
@@ -1359,12 +1479,12 @@ class MediaSynthesisService {
         };
     }
 
-    // Web Speech API ile metni seslendirip bitiÃ…Å¸ callback'i ÃƒÂ§aÃ„Å¸Ã„Â±rÃ„Â±r
+    // Web Speech API ile metni seslendirip bitiş callback'i çağırır
     static speakWithWebSpeech(text, voice, onEnd) {
         return new Promise((resolve) => {
             try {
                 if (typeof window === 'undefined' || !window.speechSynthesis) {
-                    addSystemLog('TarayÃ„Â±cÃ„Â± seslendirme desteklemiyor.', 'warn');
+                    addSystemLog('Tarayıcı seslendirme desteklemiyor.', 'warn');
                     if (onEnd) onEnd();
                     return resolve(null);
                 }
@@ -1379,7 +1499,7 @@ class MediaSynthesisService {
                 window.speechSynthesis.cancel();
                 window.speechSynthesis.speak(u);
             } catch (e) {
-                addSystemLog('Web Speech hatasÃ„Â±: ' + e.message, 'warn');
+                addSystemLog('Web Speech hatası: ' + e.message, 'warn');
                 if (onEnd) onEnd();
                 resolve(null);
             }
@@ -1404,14 +1524,14 @@ class AmbientAudioService {
     }
 }
 
-// TÃƒÂ¼rkÃƒÂ§e bÃƒÂ¼yÃƒÂ¼k harf dÃƒÂ¶nÃƒÂ¼Ã…Å¸ÃƒÂ¼mÃƒÂ¼ Ã¢â‚¬â€ Ã„Â±Ã¢â€ â€™I, iÃ¢â€ â€™Ã„Â°
-const trUpper = (str) => str.replace(/Ã„Â±/g, 'I').replace(/i/g, 'Ã„Â°').toUpperCase();
+// Türkçe büyük harf dönüşümü — ı→I, i→İ
+const trUpper = (str) => str.replace(/ı/g, 'I').replace(/i/g, 'İ').toUpperCase();
 
 const RenderWorkerService = {
-    // Instagram Reels / TikTok gÃƒÂ¼venli alan sÃ„Â±nÃ„Â±rlarÃ„Â± (canvas %)
+    // Instagram Reels / TikTok güvenli alan sınırları (canvas %)
     SAFE_ZONE: { topUnsafe: 0.08, subtitleY: 0.72, bottomUnsafe: 0.78, rightUnsafeStart: 0.86 },
     wrapText: (ctx, text, maxWidth) => { if (!text) return []; const words = text.split(" "); const lines = []; let currentLine = words[0]; for (let i = 1; i < words.length; i++) { if (ctx.measureText(currentLine + " " + words[i]).width < maxWidth) currentLine += " " + words[i]; else { lines.push(currentLine); currentLine = words[i]; } } lines.push(currentLine); return lines; },
-    // Kelime bazlÃ„Â± zamanlama Ã¢â‚¬â€ her kelime iÃƒÂ§in start/end
+    // Kelime bazlı zamanlama — her kelime için start/end
     calculateWordTimings: (text, audioDuration) => {
         if (!text || !audioDuration) return [];
         const words = text.replace(/\n/g, ' ').split(/\s+/).filter(Boolean);
@@ -1428,7 +1548,7 @@ const RenderWorkerService = {
         }
         return timings;
     },
-    // AltyazÃ„Â±: kelime bazlÃ„Â± zamanlamadan 2'li gruplar oluÃ…Å¸tur
+    // Altyazı: kelime bazlı zamanlamadan 2'li gruplar oluştur
     calculateSubtitles: (text, exactAudioDur) => {
         const wordTimings = RenderWorkerService.calculateWordTimings(text, exactAudioDur);
         if (wordTimings.length === 0) return [];
@@ -1444,7 +1564,7 @@ const RenderWorkerService = {
         }
         return subs;
     },
-    // AltyazÃ„Â±: wordTimings array'inden doÃ„Å¸rudan oluÃ…Å¸tur (scale edilmemiÃ…Å¸ gerÃƒÂ§ek ses zamanlamasÃ„Â±)
+    // Altyazı: wordTimings array'inden doğrudan oluştur (scale edilmemiş gerçek ses zamanlaması)
     _subsFromWordTimings: (wordTimings) => {
         if (!wordTimings || wordTimings.length === 0) return [];
         const subs = [];
@@ -1459,26 +1579,26 @@ const RenderWorkerService = {
         }
         return subs;
     },
-    // Sessizlik tespiti ve kÃ„Â±rpma
+    // Sessizlik tespiti ve kırpma
     trimSilence: (audioBuffer, threshold = 0.01) => {
         if (!audioBuffer || !audioBuffer.getChannelData) return audioBuffer;
         const data = audioBuffer.getChannelData(0);
         const sampleRate = audioBuffer.sampleRate;
-        // BaÃ…Å¸taki sessizliÃ„Å¸i bul
+        // Baştaki sessizliği bul
         let firstSound = 0;
         for (let i = 0; i < data.length; i++) {
             if (Math.abs(data[i]) > threshold) { firstSound = i; break; }
         }
-        // Sondaki sessizliÃ„Å¸i bul
+        // Sondaki sessizliği bul
         let lastSound = data.length - 1;
         for (let i = data.length - 1; i >= 0; i--) {
             if (Math.abs(data[i]) > threshold) { lastSound = i; break; }
         }
-        // 50ms tolerans ekle (fade iÃƒÂ§in)
+        // 50ms tolerans ekle (fade için)
         const toleranceSamples = Math.round(sampleRate * 0.05);
         firstSound = Math.max(0, firstSound - toleranceSamples);
         lastSound = Math.min(data.length - 1, lastSound + toleranceSamples);
-        // KÃ„Â±rpÃ„Â±lmÃ„Â±Ã…Å¸ uzunluk Ã¢â‚¬â€ en az %50'sini koru
+        // Kırpılmış uzunluk — en az %50'sini koru
         const newLength = lastSound - firstSound + 1;
         if (newLength < data.length * 0.5 || newLength <= 0) return audioBuffer;
         const ctx = new OfflineAudioContext(audioBuffer.numberOfChannels, newLength, sampleRate);
@@ -1493,7 +1613,7 @@ const RenderWorkerService = {
     drawImageContain: (ctx, img, w, h) => { const imgRatio = img.width / img.height; const canvasRatio = w / h; let drawW = w, drawH = h, offsetX = 0, offsetY = 0; if (imgRatio > canvasRatio) { drawH = w / imgRatio; offsetY = (h - drawH) / 2; } else { drawW = h * imgRatio; offsetX = (w - drawW) / 2; } ctx.fillStyle = "black"; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, offsetX, offsetY, drawW, drawH); },
     drawImageCover: (ctx, img, w, h) => { const imgRatio = img.width / img.height; const canvasRatio = w / h; let drawW = w, drawH = h, offsetX = 0, offsetY = 0; if (imgRatio > canvasRatio) { drawW = h * imgRatio; offsetX = (w - drawW) / 2; } else { drawH = w / imgRatio; offsetY = (h - drawH) / 2; } ctx.fillStyle = "black"; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, offsetX, offsetY, drawW, drawH); },
     drawThumbnail: (ctx, img, text, w, h, fontFamily, sourceName, config) => {
-        // 1. Siyah arka plan + gÃƒÂ¶rsel
+        // 1. Siyah arka plan + görsel
         ctx.fillStyle = "black"; ctx.fillRect(0, 0, w, h);
         if (img) RenderWorkerService.drawImageContain(ctx, img, w, h);
 
@@ -1514,12 +1634,12 @@ const RenderWorkerService = {
 
         const cx = w / 2;
 
-        // 4. ÃƒÅ“ST SÃ„Â°YAH BAR Ã¢â‚¬â€ Anadolu AjansÃ„Â± formatÃ„Â±
+        // 4. ÜST SİYAH BAR — Anadolu Ajansı formatı
         const barH = Math.round(h * 0.125);
-        let sourceFontSize = Math.round(h * 0.022) + 4; // 2 punto daha bÃƒÂ¼yÃƒÂ¼tÃƒÂ¼ldÃƒÂ¼
-        let dateFontSize = Math.round(h * 0.018) + 4;   // 2 punto daha bÃƒÂ¼yÃƒÂ¼tÃƒÂ¼ldÃƒÂ¼
-        const spacing = 3; // Kaynak adÃ„Â± ve tarih arasÃ„Â± 3 punto boÃ…Å¸luk
-        // TaÃ…Å¸ma kontrolÃƒÂ¼ Ã¢â‚¬â€ bar yÃƒÂ¼ksekliÃ„Å¸ine sÃ„Â±Ã„Å¸dÃ„Â±r
+        let sourceFontSize = Math.round(h * 0.022) + 4; // 2 punto daha büyütüldü
+        let dateFontSize = Math.round(h * 0.018) + 4;   // 2 punto daha büyütüldü
+        const spacing = 3; // Kaynak adı ve tarih arası 3 punto boşluk
+        // Taşma kontrolü — bar yüksekliğine sığdır
         const totalTextH = sourceFontSize + 14 + spacing + dateFontSize;
         if (totalTextH > barH * 0.9) {
             const scale = (barH * 0.9) / totalTextH;
@@ -1527,15 +1647,15 @@ const RenderWorkerService = {
             dateFontSize = Math.floor(dateFontSize * scale);
         }
 
-        // Siyah bar (tam geniÃ…Å¸lik)
+        // Siyah bar (tam genişlik)
         ctx.fillStyle = "#000000";
         ctx.fillRect(0, 0, w, barH);
 
-        // KÃ„Â±rmÃ„Â±zÃ„Â± kutu Ã¢â‚¬â€ sadece yazÃ„Â± kadar geniÃ…Å¸lik
+        // Kırmızı kutu — sadece yazı kadar genişlik
         if (sourceName) {
             ctx.font = `900 ${sourceFontSize}px ${fontFamily}`;
             const textW = ctx.measureText(trUpper(sourceName)).width;
-            const redBoxW = textW + 24; // Padding: sadece yazÃ„Â± kadar + minimal padding
+            const redBoxW = textW + 24; // Padding: sadece yazı kadar + minimal padding
             const redBoxH = sourceFontSize + 14;
             const redBoxX = cx - redBoxW / 2;
             const redBoxY = Math.round(barH * 0.38);
@@ -1557,27 +1677,27 @@ const RenderWorkerService = {
             ctx.fillText(trUpper(sourceName), cx, redBoxY + redBoxH / 2);
         }
 
-        // Tarih Ã¢â‚¬â€ kÃ„Â±rmÃ„Â±zÃ„Â± kutunun altÃ„Â±nda, 3 punto boÃ…Å¸luk
+        // Tarih — kırmızı kutunun altında, 3 punto boşluk
         const dateY = sourceName ? (Math.round(barH * 0.38) + sourceFontSize + 14 + spacing + dateFontSize / 2) : barH * 0.78;
         ctx.fillStyle = "#FFFFFF";
         ctx.font = `900 ${dateFontSize}px ${fontFamily}`;
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillText(dateLine, cx, dateY);
 
-        // 5. ANA BAÃ…ÂLIK Ã¢â‚¬â€ gÃƒÂ¶rselin ortasÃ„Â±nda
+        // 5. ANA BAŞLIK — görselin ortasında
         const titleAreaTop = barH + h * 0.02;
         const titleAreaBottom = h * RenderWorkerService.SAFE_ZONE.bottomUnsafe;
         const titleAreaH = titleAreaBottom - titleAreaTop;
 
         let thumbFontSize = w > 800 ? 110 : 80;
         ctx.font = `900 ${thumbFontSize}px ${fontFamily}`;
-        let lines = RenderWorkerService.wrapText(ctx, trUpper(text || "Ã…ÂOK HABER!"), w * 0.88);
+        let lines = RenderWorkerService.wrapText(ctx, trUpper(text || "ŞOK HABER!"), w * 0.88);
         let lh = thumbFontSize * 1.12;
 
         while (lines.length * lh > titleAreaH && thumbFontSize > 28) {
             thumbFontSize -= 4;
             ctx.font = `900 ${thumbFontSize}px ${fontFamily}`;
-            lines = RenderWorkerService.wrapText(ctx, trUpper(text || "Ã…ÂOK HABER!"), w * 0.90);
+            lines = RenderWorkerService.wrapText(ctx, trUpper(text || "ŞOK HABER!"), w * 0.90);
             lh = thumbFontSize * 1.12;
         }
 
@@ -1606,8 +1726,8 @@ const RenderWorkerService = {
     },
     drawStar: (ctx, cx, cy, spikes, outerRadius, innerRadius, color = "#FFFFFF") => { let rot = (Math.PI / 2) * 3; let step = Math.PI / spikes; ctx.beginPath(); ctx.moveTo(cx, cy - outerRadius); for (let i = 0; i < spikes; i++) { let x = cx + Math.cos(rot) * outerRadius; let y = cy + Math.sin(rot) * outerRadius; ctx.lineTo(x, y); rot += step; x = cx + Math.cos(rot) * innerRadius; y = cy + Math.sin(rot) * innerRadius; ctx.lineTo(x, y); rot += step; } ctx.lineTo(cx, cy - outerRadius); ctx.closePath(); ctx.fillStyle = color; ctx.fill(); },
     renderGuzelSoz: async (jobData, canvasElement, w, h, cx, fontFamily) => {
-        // Felsefi video render: HOOK Ã¢â€ â€™ LEAD Ã¢â€ â€™ QUOTE(s) Ã¢â€ â€™ CTA
-        addSystemLog('Felsefi video render baÃ…Å¸lÃ„Â±yor...', 'info');
+        // Felsefi video render: HOOK → LEAD → QUOTE(s) → CTA
+        addSystemLog('Felsefi video render başlıyor...', 'info');
         const slides = jobData.script.videoSlides || [];
         const FPS = 30;
 
@@ -1621,7 +1741,7 @@ const RenderWorkerService = {
         const audioDest = audioCtx ? audioCtx.createMediaStreamDestination() : null;
         const silentOsc = audioCtx.createOscillator(); const silentGain = audioCtx.createGain(); silentGain.gain.value = 0.001; silentOsc.connect(silentGain); silentGain.connect(audioDest); silentOsc.start();
 
-        // Her slaytÃ„Â±n ses sÃƒÂ¼resini hesapla
+        // Her slaytın ses süresini hesapla
         const getAudioDur = (audioData, text) => {
             if (audioData?.wavBuffer) {
                 let byteLength = 0;
@@ -1633,26 +1753,26 @@ const RenderWorkerService = {
             return Math.max(2.0, wc / 2.2);
         };
 
-        // Her slayt iÃƒÂ§in sÃƒÂ¼re hesapla (minimum 3 saniye)
+        // Her slayt için süre hesapla (minimum 3 saniye)
         const slideDurations = slides.map((slide, i) => {
             const audioData = jobData.assets.audio[i];
             const audioDur = getAudioDur(audioData, slide.spokenText);
             const slideType = slide._slideType || 'QUOTE';
-            // HOOK: 3-4 saniye, LEAD: 4-6 saniye, QUOTE: ses sÃƒÂ¼resi + buffer, CTA: 5-7 saniye
+            // HOOK: 3-4 saniye, LEAD: 4-6 saniye, QUOTE: ses süresi + buffer, CTA: 5-7 saniye
             if (slideType === 'HOOK') return Math.max(3.5, Math.min(audioDur + 1.0, 5.0));
             if (slideType === 'LEAD') return Math.max(4.0, Math.min(audioDur + 1.5, 8.0));
             if (slideType === 'CTA') return Math.max(5.0, Math.min(audioDur + 2.0, 10.0));
             return Math.max(4.0, audioDur + 1.5); // QUOTE
         });
 
-        // Intro (1 siyah kare) + outro (2 saniye siyah) sÃƒÂ¼releri
+        // Intro (1 siyah kare) + outro (2 saniye siyah) süreleri
         const introDur = 1.0;
         const outroDur = 2.0;
         const totalDuration = slideDurations.reduce((a, b) => a + b, 0) + introDur + outroDur;
         const totalFrames = Math.round(totalDuration * FPS);
-        addSystemLog(`Toplam sÃƒÂ¼re: ${totalDuration.toFixed(1)}sn (${slides.length} sahne + intro/outro)`, 'info');
+        addSystemLog(`Toplam süre: ${totalDuration.toFixed(1)}sn (${slides.length} sahne + intro/outro)`, 'info');
 
-        // Slayt kare aralÃ„Â±klarÃ„Â±nÃ„Â± hesapla
+        // Slayt kare aralıklarını hesapla
         let frameOffset = Math.round(introDur * FPS);
         const slideFrameRanges = slideDurations.map((dur) => {
             const start = frameOffset;
@@ -1661,7 +1781,7 @@ const RenderWorkerService = {
             return { start, end };
         });
 
-        // Ses ÃƒÂ§alma Ã¢â‚¬â€ her slayt iÃƒÂ§in
+        // Ses çalma — her slayt için
         const playSlideAudio = async (index) => {
             const audioData = jobData.assets.audio[index];
             if (!audioData?.wavBuffer) return;
@@ -1675,16 +1795,16 @@ const RenderWorkerService = {
                 source.playbackRate.value = 1.0;
                 const gain = audioCtx.createGain(); gain.gain.value = 0.85;
                 source.connect(gain); gain.connect(audioDest); source.start(0);
-            } catch (e) { addSystemLog(`Slayt ${index} ses hatasÃ„Â±: ${e.message}`, 'warn'); }
+            } catch (e) { addSystemLog(`Slayt ${index} ses hatası: ${e.message}`, 'warn'); }
         };
 
-        // MÃƒÂ¼zik setup
+        // Müzik setup
         let bgmSource, masterGain;
         let ambientSound = jobData.preferences.ambientSound || 'none';
         if (ambientSound === 'none') {
             try {
                 const allMusic = await AssetManagerService.getAllMusicFromLib();
-                if (allMusic.length > 0) { ambientSound = allMusic[0].id; addSystemLog(`MÃƒÂ¼zik otomatik: ${allMusic[0].name}`, 'info'); }
+                if (allMusic.length > 0) { ambientSound = allMusic[0].id; addSystemLog(`Müzik otomatik: ${allMusic[0].name}`, 'info'); }
             } catch (e) {}
         }
         if (ambientSound !== 'none') {
@@ -1704,9 +1824,9 @@ const RenderWorkerService = {
                         if (!bgmSource) { bgmSource = audioCtx.createBufferSource(); bgmSource.buffer = buf; bgmSource.loop = true; }
                         masterGain = audioCtx.createGain(); masterGain.gain.value = 0.25;
                         bgmSource.connect(masterGain); masterGain.connect(audioDest); bgmSource.start(0);
-                        addSystemLog('MÃƒÂ¼zik yÃƒÂ¼klendi: ' + track.name, 'success');
+                        addSystemLog('Müzik yüklendi: ' + track.name, 'success');
                     }
-                } catch (e) { addSystemLog('MÃƒÂ¼zik hatasÃ„Â±: ' + e.message, 'warn'); }
+                } catch (e) { addSystemLog('Müzik hatası: ' + e.message, 'warn'); }
             }
         }
 
@@ -1725,7 +1845,7 @@ const RenderWorkerService = {
         recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
         recorder.start(100);
 
-        // GÃƒÂ¶rselleri yÃƒÂ¼kle
+        // Görselleri yükle
         const images = jobData.assets.images.filter(img => img);
         const loadedImages = [];
         for (const imgData of images) {
@@ -1733,7 +1853,7 @@ const RenderWorkerService = {
             if (img) loadedImages.push(img);
         }
         if (loadedImages.length === 0) loadedImages.push(null);
-        addSystemLog(`${loadedImages.length} gÃƒÂ¶rsel yÃƒÂ¼klendi.`, 'info');
+        addSystemLog(`${loadedImages.length} görsel yüklendi.`, 'info');
 
         // Timer Worker
         const timerWorkerCode = `let interval; self.onmessage = function(e) { if (e.data === 'start') interval = setInterval(() => self.postMessage('tick'), 25); if (e.data === 'stop') clearInterval(interval); };`;
@@ -1747,10 +1867,10 @@ const RenderWorkerService = {
 
         const kenBurnsDir = Math.floor(Math.random() * 4);
         let lastSlideIndex = -1;
-        // Her slayt iÃƒÂ§in rastgele Ken Burns yÃƒÂ¶nÃƒÂ¼
+        // Her slayt için rastgele Ken Burns yönü
         const slideKenBurns = slides.map(() => Math.floor(Math.random() * 4));
 
-        // Metin ÃƒÂ§izim yardÃ„Â±mcÃ„Â± fonksiyonu
+        // Metin çizim yardımcı fonksiyonu
         const drawOutlinedText = (text, x, y, fontSize, color = "#FFFFFF", outlineColor = "#000000", outlineWidth = 5) => {
             ctx.font = `bold ${fontSize}px ${fontFamily}`;
             ctx.textAlign = "center"; ctx.textBaseline = "middle";
@@ -1760,7 +1880,7 @@ const RenderWorkerService = {
             ctx.fillText(text, x, y);
         };
 
-        // Wrap text yardÃ„Â±mcÃ„Â± fonksiyonu
+        // Wrap text yardımcı fonksiyonu
         const wrapAndDraw = (text, x, y, maxWidth, fontSize, color = "#FFFFFF", lineHeight = null) => {
             const lh = lineHeight || fontSize * 1.5;
             ctx.font = `bold ${fontSize}px ${fontFamily}`;
@@ -1783,7 +1903,7 @@ const RenderWorkerService = {
             const isOutro = frame >= totalFrames - Math.round(outroDur * FPS);
 
             if (!isIntro && !isOutro) {
-                // GeÃƒÂ§erli slaytÃ„Â± bul
+                // Geçerli slaytı bul
                 let currentSlideIdx = -1;
                 for (let i = 0; i < slideFrameRanges.length; i++) {
                     if (frame >= slideFrameRanges[i].start && frame < slideFrameRanges[i].end) {
@@ -1800,13 +1920,13 @@ const RenderWorkerService = {
                     const slideDuration = slideDurations[currentSlideIdx];
                     const slideProgress = (frame - range.start) / (range.end - range.start);
 
-                    // Ses tetikleme Ã¢â‚¬â€ yeni slayta geÃƒÂ§iÃ…Å¸te
+                    // Ses tetikleme — yeni slayta geçişte
                     if (currentSlideIdx !== lastSlideIndex) {
                         lastSlideIndex = currentSlideIdx;
                         playSlideAudio(currentSlideIdx);
                     }
 
-                    // Ken Burns arka plan gÃƒÂ¶rseli
+                    // Ken Burns arka plan görseli
                     if (loadedImages[imgIdx]) {
                         const kbDir = slideKenBurns[currentSlideIdx];
                         const t = slideProgress;
@@ -1837,45 +1957,45 @@ const RenderWorkerService = {
                     const fadeOut = slideProgress > 0.85 ? 1 - ((slideProgress - 0.85) / 0.15) : 1;
                     ctx.globalAlpha = Math.max(0, Math.min(1, fadeIn * fadeOut));
 
-                    // Slayt tipine gÃƒÂ¶re render
+                    // Slayt tipine göre render
                     if (slideType === 'HOOK') {
-                        // VURUCU BAÃ…ÂLIK Ã¢â‚¬â€ bÃƒÂ¼yÃƒÂ¼k, merkez, dramatik
+                        // VURUCU BAŞLIK — büyük, merkez, dramatik
                         const hookText = slide.spokenText || slide.topText;
                         const fontSize = w > 800 ? 52 : 40;
                         wrapAndDraw(hookText, cx, h * 0.45, w * 0.85, fontSize, "#FFD700");
-                        // AltÃ„Â±n ÃƒÂ§izgi dekorasyonu
+                        // Altın çizgi dekorasyonu
                         ctx.strokeStyle = "rgba(255, 215, 0, 0.4)"; ctx.lineWidth = 2;
                         ctx.beginPath(); ctx.moveTo(w * 0.15, h * 0.62); ctx.lineTo(w * 0.85, h * 0.62); ctx.stroke();
                     }
                     else if (slideType === 'LEAD') {
-                        // GÃ„Â°RÃ„Â°Ã…Â Ã¢â‚¬â€ orta boy, beyaz, merkez
+                        // GİRİŞ — orta boy, beyaz, merkez
                         const leadText = slide.spokenText;
                         const fontSize = w > 800 ? 36 : 28;
                         wrapAndDraw(leadText, cx, h * 0.45, w * 0.82, fontSize, "#E2E8F0");
                     }
                     else if (slideType === 'QUOTE') {
-                        // DÃƒÅ“Ã…ÂÃƒÅ“NÃƒÅ“R SÃƒâ€“ZÃƒÅ“ Ã¢â‚¬â€ isim ÃƒÂ¼stte, sÃƒÂ¶z ortada, vurgu altta
+                        // DÜŞÜNÜR SÖZÜ — isim üstte, söz ortada, vurgu altta
                         const nameText = slide.topText;
                         const quoteText = slide._quoteText || slide.spokenText;
                         const emphasis = slide._emphasis || "";
 
-                        // DÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼r adÃ„Â± Ã¢â‚¬â€ altÃ„Â±n, ÃƒÂ¼st kÃ„Â±sÃ„Â±m
+                        // Düşünür adı — altın, üst kısım
                         const nameFontSize = w > 800 ? 38 : 30;
                         drawOutlinedText(nameText, cx, h * 0.18, nameFontSize, "#FFD700", "#000000", 4);
 
-                        // Alt ÃƒÂ§izgi
+                        // Alt çizgi
                         ctx.strokeStyle = "rgba(255, 215, 0, 0.3)"; ctx.lineWidth = 1;
                         ctx.beginPath(); ctx.moveTo(w * 0.25, h * 0.25); ctx.lineTo(w * 0.75, h * 0.25); ctx.stroke();
 
-                        // BÃƒÂ¼yÃƒÂ¼k tÃ„Â±rnak iÃ…Å¸areti
+                        // Büyük tırnak işareti
                         ctx.fillStyle = "rgba(255, 215, 0, 0.15)"; ctx.font = `bold ${w > 800 ? 120 : 90}px Georgia, serif`;
                         ctx.textAlign = "left"; ctx.fillText('"', w * 0.08, h * 0.45);
 
-                        // SÃƒÂ¶z metni Ã¢â‚¬â€ beyaz, merkez
+                        // Söz metni — beyaz, merkez
                         const quoteFontSize = w > 800 ? 34 : 26;
                         wrapAndDraw(quoteText, cx, h * 0.47, w * 0.78, quoteFontSize, "#FFFFFF");
 
-                        // Vurgu Ã¢â‚¬â€ kÃƒÂ¼ÃƒÂ§ÃƒÂ¼k, gri, alt kÃ„Â±sÃ„Â±m
+                        // Vurgu — küçük, gri, alt kısım
                         if (emphasis) {
                             const emphFontSize = w > 800 ? 22 : 18;
                             ctx.globalAlpha = Math.max(0, Math.min(0.8, fadeIn * fadeOut));
@@ -1883,7 +2003,7 @@ const RenderWorkerService = {
                         }
                     }
                     else if (slideType === 'CTA') {
-                        // KAPANIÃ…Â Ã¢â‚¬â€ soru + hashtag'ler
+                        // KAPANIŞ — soru + hashtag'ler
                         const ctaText = slide.spokenText;
                         const hashtags = slide._hashtags || "";
 
@@ -1891,17 +2011,17 @@ const RenderWorkerService = {
                         const ctaFontSize = w > 800 ? 34 : 26;
                         wrapAndDraw(ctaText, cx, h * 0.35, w * 0.82, ctaFontSize, "#E2E8F0");
 
-                        // Hashtag'ler Ã¢â‚¬â€ alt kÃ„Â±sÃ„Â±m, kÃƒÂ¼ÃƒÂ§ÃƒÂ¼k, mavi
+                        // Hashtag'ler — alt kısım, küçük, mavi
                         if (hashtags) {
                             const hashFontSize = w > 800 ? 20 : 16;
                             ctx.globalAlpha = Math.max(0, Math.min(0.7, fadeIn * fadeOut));
                             wrapAndDraw(hashtags, cx, h * 0.70, w * 0.9, hashFontSize, "#60A5FA");
                         }
 
-                        // "YorumlarÃ„Â±nÃ„Â±zÃ„Â± bekliyorum" alt ÃƒÂ§izgisi
+                        // "Yorumlarınızı bekliyorum" alt çizgisi
                         const subFontSize = w > 800 ? 24 : 20;
                         ctx.globalAlpha = Math.max(0, Math.min(0.9, fadeIn * fadeOut));
-                        drawOutlinedText("ÄŸÅ¸â€™Â¬ GÃƒÂ¶rÃƒÂ¼Ã…Å¸lerinizi yorumlarda paylaÃ…Å¸Ã„Â±n", cx, h * 0.76, subFontSize, "#A78BFA");
+                        drawOutlinedText("💬 Görüşlerinizi yorumlarda paylaşın", cx, h * 0.76, subFontSize, "#A78BFA");
                     }
 
                     ctx.globalAlpha = 1;
@@ -1926,8 +2046,8 @@ const RenderWorkerService = {
         const videoPromise = new Promise((resolve, reject) => {
             recorder.onstop = () => {
                 const blob = new Blob(chunks, { type: mimeType });
-                addSystemLog(`Video hazÃ„Â±r: ${(blob.size / 1024).toFixed(0)}KB, ${totalDuration.toFixed(1)}sn`, blob.size > 0 ? 'success' : 'error');
-                if (blob.size === 0) return reject(new Error("Video oluÃ…Å¸turulamadÃ„Â±."));
+                addSystemLog(`Video hazır: ${(blob.size / 1024).toFixed(0)}KB, ${totalDuration.toFixed(1)}sn`, blob.size > 0 ? 'success' : 'error');
+                if (blob.size === 0) return reject(new Error("Video oluşturulamadı."));
                 resolve(URL.createObjectURL(blob));
             };
         });
@@ -1940,8 +2060,8 @@ const RenderWorkerService = {
         return await videoPromise;
     },
     executeRender: async (jobData, canvasElement, preferences) => {
-        // Ekonomi verisi doÃ„Å¸rulama
-                    // TÃƒÂ¼rkÃƒÂ§e karakter dÃƒÂ¼zeltmesi Ã¢â‚¬â€ her zaman uygula
+        // Ekonomi verisi doğrulama
+                    // Türkçe karakter düzeltmesi — her zaman uygula
                     if (jobData.script) {
                         if (jobData.script.thumbnailText) jobData.script.thumbnailText = LogicEngineService.validateTurkishText(jobData.script.thumbnailText);
                         if (jobData.script.sonSoz) jobData.script.sonSoz = LogicEngineService.validateTurkishText(jobData.script.sonSoz);
@@ -1959,7 +2079,7 @@ const RenderWorkerService = {
                         addSystemLog('Ekonomi uyarilari: ' + econErrors.join(', '), 'warn');
                     }
                     
-                    addSystemLog('Video render baÃ…Å¸latÃ„Â±lÃ„Â±yor...', 'info');
+                    addSystemLog('Video render başlatılıyor...', 'info');
         const aspectRatio = jobData.config.aspectRatio || '9:16';
         const w = aspectRatio === '16:9' ? 1280 : aspectRatio === '1:1' ? 1080 : 720;
         const h = aspectRatio === '16:9' ? 720 : aspectRatio === '1:1' ? 1080 : 1280;
@@ -1969,7 +2089,7 @@ const RenderWorkerService = {
         ctx.fillStyle = "#0B0F19"; ctx.fillRect(0, 0, w, h);
 
         if (jobData.config.outputType === 'image') {
-            sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 90, text: 'GÃƒÂ¶rsel Paketleniyor...' });
+            sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 90, text: 'Görsel Paketleniyor...' });
             const promptImageToUse = jobData.assets.images[0] || jobData.assets.thumbnail;
             if (promptImageToUse) { const sImg = await NetworkUtils.loadImage(promptImageToUse); if (sImg) RenderWorkerService.drawImageContain(ctx, sImg, w, h); }
             return new Promise((resolve) => { canvasElement.toBlob((blob) => resolve(URL.createObjectURL(blob)), 'image/png'); });
@@ -1983,7 +2103,7 @@ const RenderWorkerService = {
         }
 
         const targetDurStr = jobData.config.duration || '30'; const isUnlimited = targetDurStr === 'unlimited';
-        // Birden fazla blok varsa sÃƒÂ¼re sÃ„Â±nÃ„Â±rÃ„Â± yok Ã¢â‚¬â€ doÃ„Å¸al okuma hÃ„Â±zÃ„Â±nda bitir
+        // Birden fazla blok varsa süre sınırı yok — doğal okuma hızında bitir
         const hasMultipleBlocks = (jobData.script.imageBlocks || []).length > 1;
         const useForceExact = !isUnlimited && !hasMultipleBlocks;
         const bounds = getDurationBounds(targetDurStr); const limitSec = useForceExact ? bounds.max : 9999;
@@ -1996,19 +2116,19 @@ const RenderWorkerService = {
 
         let rawKapakDur = Math.min(jobData.assets.thumbnailAudio ? (getAudioDur(jobData.assets.thumbnailAudio, jobData.script.thumbnailText) + 0.5) : 1.5, 5.0); // Maksimum 5 saniye
         let rawSonSozDur = jobData.script.sonSoz ? (getAudioDur(jobData.assets.sonSozAudio, jobData.script.sonSoz) + 0.05) : 0;
-        // Yorum sÃƒÂ¼resini son sÃƒÂ¶z sÃƒÂ¼resine ekle Ã¢â‚¬â€ yorum bitmeden kapanÃ„Â±Ã…Å¸a geÃƒÂ§mesin
+        // Yorum süresini son söz süresine ekle — yorum bitmeden kapanışa geçmesin
         if (jobData.config.yorum && jobData.config.yorum.trim().length > 0 && jobData.assets.yorumAudio) {
             const yorumWords = jobData.config.yorum.trim().split(/\s+/).filter(Boolean).length;
             const yorumExtra = Math.max(1.0, yorumWords / getWPS(jobData.config.language || 'tr')) + 0.3;
             rawSonSozDur += yorumExtra;
         }
-        let rawOutroDur = Math.max(7.0, getAudioDur(jobData.assets.outroAudio, jobData.script.lastQuote) + 0.5); // Min 7sn Ã¢â‚¬â€ animasyonlar iÃƒÂ§in
+        let rawOutroDur = Math.max(7.0, getAudioDur(jobData.assets.outroAudio, jobData.script.lastQuote) + 0.5); // Min 7sn — animasyonlar için
         let rawSlideSecs = jobData.script.videoSlides.map((s, i) => getAudioDur(jobData.assets.audio[i], s.spokenText) + 0.02);
         let rawCushion = 0.03;
         let totalNaturalSec = rawKapakDur + rawSonSozDur + rawOutroDur + rawCushion + rawSlideSecs.reduce((a, b) => a + b, 0);
         let scaleFactor = 1.0;
-        if (hasMultipleBlocks) { addSystemLog(`Ãƒâ€¡oklu blok: SÃƒÂ¼re sÃ„Â±nÃ„Â±rÃ„Â± yok. DoÃ„Å¸al okuma hÃ„Â±zÃ„Â± (${totalNaturalSec.toFixed(1)}sn).`, 'info'); }
-        else if (useForceExact) { if (totalNaturalSec > bounds.max) { scaleFactor = bounds.max / totalNaturalSec; addSystemLog(`SÃƒÂ¼re limitine sÃ„Â±Ã„Å¸dÃ„Â±rÃ„Â±lÃ„Â±yor (${scaleFactor.toFixed(2)}x)...`, "warn"); } else if (totalNaturalSec < bounds.min) { scaleFactor = bounds.min / totalNaturalSec; addSystemLog(`Minimum sÃƒÂ¼re yakalanÃ„Â±yor (${scaleFactor.toFixed(2)}x)...`, "warn"); } }
+        if (hasMultipleBlocks) { addSystemLog(`Çoklu blok: Süre sınırı yok. Doğal okuma hızı (${totalNaturalSec.toFixed(1)}sn).`, 'info'); }
+        else if (useForceExact) { if (totalNaturalSec > bounds.max) { scaleFactor = bounds.max / totalNaturalSec; addSystemLog(`Süre limitine sığdırılıyor (${scaleFactor.toFixed(2)}x)...`, "warn"); } else if (totalNaturalSec < bounds.min) { scaleFactor = bounds.min / totalNaturalSec; addSystemLog(`Minimum süre yakalanıyor (${scaleFactor.toFixed(2)}x)...`, "warn"); } }
 
         const timerWorkerCode = `let interval; self.onmessage = function(e) { if (e.data === 'start') interval = setInterval(() => self.postMessage('tick'), 25); if (e.data === 'stop') clearInterval(interval); };`;
         const timerWorkerBlob = new Blob([timerWorkerCode], { type: 'application/javascript' });
@@ -2047,20 +2167,20 @@ const RenderWorkerService = {
                 try {
                     let bufferCopy; if (audioData.wavBuffer instanceof ArrayBuffer) bufferCopy = audioData.wavBuffer.slice(0); else if (audioData.wavBuffer.buffer instanceof ArrayBuffer) bufferCopy = audioData.wavBuffer.buffer.slice(0); else if (typeof audioData.wavBuffer === 'object') { const uint8 = new Uint8Array(Object.values(audioData.wavBuffer)); bufferCopy = uint8.buffer.slice(0); } else bufferCopy = audioData.wavBuffer;
                     let audioBuf = await audioCtx.decodeAudioData(bufferCopy);
-                    // SessizliÃ„Å¸i kÃ„Â±rp Ã¢â‚¬â€ baÃ…Å¸taki ve sondaki
+                    // Sessizliği kırp — baştaki ve sondaki
                     audioBuf = RenderWorkerService.trimSilence(audioBuf);
                     const source = audioCtx.createBufferSource(); source.buffer = audioBuf;
-                    // scaleFactor'Ã„Â± ses hÃ„Â±zÃ„Â±na uygula Ã¢â‚¬â€ video sÃƒÂ¼resini deÃ„Å¸il
+                    // scaleFactor'ı ses hızına uygula — video süresini değil
                     source.playbackRate.value = scaleFactor;
                     const gain = audioCtx.createGain(); gain.gain.value = 0.8; // Narrator %80
                     source.connect(gain); gain.connect(audioDest); source.start(0);
                     baseExactDur = Math.min(audioBuf.duration, 180.0);
                     audioEndPromise = new Promise(resolve => { source.onended = resolve; });
-                } catch (e) { console.warn("Ses decode hatasÃ„Â±:", e); }
+                } catch (e) { console.warn("Ses decode hatası:", e); }
             }
-            // Video sÃƒÂ¼resi = ses sÃƒÂ¼resi / scaleFactor
+            // Video süresi = ses süresi / scaleFactor
             const scaledAudioDur = baseExactDur / scaleFactor;
-            // Kelime bazlÃ„Â± zamanlama Ã¢â‚¬â€ scale edilmiÃ…Å¸ sÃƒÂ¼reye gÃƒÂ¶re (altyazÃ„Â± senkronu iÃƒÂ§in)
+            // Kelime bazlı zamanlama — scale edilmiş süreye göre (altyazı senkronu için)
             wordTimings = RenderWorkerService.calculateWordTimings(fallbackText, scaledAudioDur);
             let totalDur = requestedDuration !== null ? requestedDuration : (scaledAudioDur + 0.02);
             return { exactDur: scaledAudioDur, totalDur, audioEndPromise, wordTimings };
@@ -2070,8 +2190,8 @@ const RenderWorkerService = {
             let startT = performance.now(); const safeText = text || "";
             const lang = jobData.config.language || 'tr';
             const hasYorum = jobData.config.yorum && jobData.config.yorum.trim().length > 0;
-            // Yorum varsa: AI son sÃƒÂ¶z yok, sadece yorum sesi ve metni
-            // Yorum yoksa: normal son sÃƒÂ¶z sesi ve metni
+            // Yorum varsa: AI son söz yok, sadece yorum sesi ve metni
+            // Yorum yoksa: normal son söz sesi ve metni
             const effectiveText = hasYorum ? jobData.config.yorum : safeText;
             const effectiveAudio = hasYorum ? jobData.assets.yorumAudio : audioData;
             const sonSozResult = await playAudio(effectiveAudio, hasYorum ? null : duration, effectiveText);
@@ -2079,20 +2199,20 @@ const RenderWorkerService = {
             const sonSozFrames = Math.max(1, Math.round(sonSozResult.totalDur * FPS));
             const totalFrames = sonSozFrames;
             let yorumAudioEnd = hasYorum ? sonSozAudioEnd : null;
-            // Son sÃƒÂ¶z sahnesi ÃƒÂ¶ncesi 1 boÃ…Å¸ kare Ã¢â‚¬â€ sahneler arasÃ„Â± net geÃƒÂ§iÃ…Å¸
+            // Son söz sahnesi öncesi 1 boş kare — sahneler arası net geçiş
             ctx.fillStyle = "black"; ctx.fillRect(0, 0, w, h);
             if (videoTrack && videoTrack.requestFrame) videoTrack.requestFrame();
             await nextFrame();
             for (let frame = 0; frame < totalFrames; frame++) {
                 if (useForceExact && globalRenderedSec >= limitSec) break;
                 ctx.fillStyle = "#030712"; ctx.fillRect(0, 0, w, h / 2);
-                // BaÃ…Å¸lÃ„Â±k sadece ÃƒÂ§oklu medyada gÃƒÂ¶sterilir Ã¢â‚¬â€ yorumdan baÃ„Å¸Ã„Â±msÃ„Â±z
+                // Başlık sadece çoklu medyada gösterilir — yorumdan bağımsız
                 if (!isSingleMedia) {
-                    let headerText = "SON SÃƒâ€“Z"; if (lang === 'de') headerText = "SCHLUSSWORT"; else if (lang === 'en') headerText = "FINAL WORDS"; else if (lang === 'fr') headerText = "MOT DE LA FIN"; else if (lang === 'es') headerText = "ÃƒÅ¡LTIMAS PALABRAS"; else if (lang === 'ar') headerText = "Ã˜Â§Ã™â€Ã™Æ’Ã™â€Ã™â€¦Ã˜Â© Ã˜Â§Ã™â€Ã˜Â£Ã˜Â®Ã™Å Ã˜Â±Ã˜Â©"; else if (lang === 'ru') headerText = "ÄÅ¸ÄÂÄÂ¡Äâ€ºÄâ€¢ÄÂ¡Äâ€ºÄÂÄâ€™Ã„Â°Äâ€¢";
+                    let headerText = "SON SÖZ"; if (lang === 'de') headerText = "SCHLUSSWORT"; else if (lang === 'en') headerText = "FINAL WORDS"; else if (lang === 'fr') headerText = "MOT DE LA FIN"; else if (lang === 'es') headerText = "ÚLTIMAS PALABRAS"; else if (lang === 'ar') headerText = "الكلمة الأخيرة"; else if (lang === 'ru') headerText = "ПОСЛЕСЛОВİЕ";
                     ctx.fillStyle = "#E11D48"; ctx.font = `900 ${w > 800 ? 54 : 44}px ${fontFamily}`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(trUpper(headerText), cx, h * 0.08);
                 }
                 if (hasYorum) {
-                    // Yorum varsa: sadece yorum metnini gÃƒÂ¶ster (AI son sÃƒÂ¶z yok)
+                    // Yorum varsa: sadece yorum metnini göster (AI son söz yok)
                     const yorumFontSize = w > 800 ? 48 : 34;
                     ctx.font = `900 ${yorumFontSize}px ${fontFamily}`;
                     const yorumLines = RenderWorkerService.wrapText(ctx, jobData.config.yorum, w * 0.85);
@@ -2103,7 +2223,7 @@ const RenderWorkerService = {
                     ctx.font = `900 ${yorumFontSize}px ${fontFamily}`; ctx.fillStyle = "white";
                     yorumLines.forEach((line, idx) => { ctx.fillText(line, cx, yorumStartY + 35 + (idx * yorumLh)); });
                 } else {
-                    // Yorum yoksa normal son sÃƒÂ¶z metnini gÃƒÂ¶ster
+                    // Yorum yoksa normal son söz metnini göster
                     let bodyFontSize = w > 800 ? 42 : 30; ctx.font = `900 ${bodyFontSize}px ${fontFamily}`; let lines = RenderWorkerService.wrapText(ctx, text, w * 0.85);
                     const maxAllowedY = h / 2 - 35;
                     const lh = bodyFontSize * 1.35; while ((h * 0.16 + lines.length * lh) > maxAllowedY && bodyFontSize > 16) { bodyFontSize -= 2; ctx.font = `900 ${bodyFontSize}px ${fontFamily}`; lines = RenderWorkerService.wrapText(ctx, text, w * 0.85); }
@@ -2124,16 +2244,16 @@ const RenderWorkerService = {
             }
             if (sonSozAudioEnd) await sonSozAudioEnd;
             if (yorumAudioEnd) await yorumAudioEnd;
-            addSystemLog(`Son sÃƒÂ¶z sahnesi render edildi.`, 'success');
+            addSystemLog(`Son söz sahnesi render edildi.`, 'success');
         };
 
         const renderScene = async (imgObj, text, audioData, duration, isThumbnail = false, isOutro = false, topText = null, slideIndex = -1, chartData = null, transition = 'none', useContain = false, zoomCoords = null) => {
             let startT = performance.now(); const { exactDur, totalDur, audioEndPromise, wordTimings } = await playAudio(audioData, duration, text);
-            // AltyazÃ„Â± Ã¢â‚¬â€ wordTimings'den oluÃ…Å¸tur (gerÃƒÂ§ek ses zamanlamasÃ„Â±, scale edilmemiÃ…Å¸)
+            // Altyazı — wordTimings'den oluştur (gerçek ses zamanlaması, scale edilmemiş)
             const subs = (isThumbnail || isOutro || wordTimings.length === 0) ? [] : RenderWorkerService._subsFromWordTimings(wordTimings);
             const totalFrames = Math.max(1, Math.round(totalDur * FPS));
             const transitionFrames = Math.min(5, Math.floor(totalFrames * 0.3)); // ~150ms fade
-            // Ken Burns yÃƒÂ¶nÃƒÂ¼ Ã¢â‚¬â€ bir kez hesapla, her karede rastgele deÃ„Å¸il
+            // Ken Burns yönü — bir kez hesapla, her karede rastgele değil
             const kbPanDirX = (Math.random() - 0.5) * 20;
             const kbPanDirY = (Math.random() - 0.5) * 20;
             for (let frame = 0; frame < totalFrames; frame++) {
@@ -2162,7 +2282,7 @@ const RenderWorkerService = {
                 if (offsetX !== 0) ctx.translate(offsetX, 0);
 
                 if (imgObj) {
-                    // Zoom koordinatlarÃ„Â± varsa o bÃƒÂ¶lgeye zoom yap
+                    // Zoom koordinatları varsa o bölgeye zoom yap
                     if (zoomCoords) {
                         const z = zoomCoords;
                         const zx = (z.x / 100) * imgObj.width;
@@ -2170,7 +2290,7 @@ const RenderWorkerService = {
                         const zw = (z.w / 100) * imgObj.width;
                         const zh = (z.h / 100) * imgObj.height;
                         
-                        // Ken Burns efekti: zoom + hafif pan (sabit yÃƒÂ¶n)
+                        // Ken Burns efekti: zoom + hafif pan (sabit yön)
                         const t = progress;
                         const zoom = 1.0 + 0.15 * t;
                         const panX = kbPanDirX * t;
@@ -2180,7 +2300,7 @@ const RenderWorkerService = {
                         ctx.translate(w / 2 + panX, h / 2 + panY);
                         ctx.scale(zoom, zoom);
                         
-                        // KÃ„Â±rpÃ„Â±lmÃ„Â±Ã…Å¸ bÃƒÂ¶lgeyi ÃƒÂ§iz
+                        // Kırpılmış bölgeyi çiz
                         const scale = Math.max(w / zw, h / zh);
                         const drawW = zw * scale;
                         const drawH = zh * scale;
@@ -2252,7 +2372,7 @@ const RenderWorkerService = {
                     if (activeSub && jobData.config.subtitles !== 'off') { let subFontSize = w > 800 ? 65 : 50; ctx.font = `900 ${subFontSize}px ${fontFamily}`; let displaySub = activeSub.trim(); while (ctx.measureText(displaySub).width > w * 0.95 && subFontSize > 30) { subFontSize -= 2; ctx.font = `900 ${subFontSize}px ${fontFamily}`; } const subTextW = ctx.measureText(displaySub).width; const subPadX = 20; const subPadY = 8; const subBoxW = subTextW + subPadX * 2; const subBoxH = subFontSize + subPadY * 2; const subBoxX = cx - subBoxW / 2; const subBoxY = h * RenderWorkerService.SAFE_ZONE.subtitleY - subBoxH / 2; ctx.fillStyle = "#2563EB"; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(subBoxX, subBoxY, subBoxW, subBoxH, 8); else ctx.rect(subBoxX, subBoxY, subBoxW, subBoxH); ctx.fill(); ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "white"; ctx.fillText(displaySub, cx, h * RenderWorkerService.SAFE_ZONE.subtitleY); }
                 }
                 if (isOutro) {
-                    // === HAREKETLI KAPANIÃ…Â SAHNESÃ„Â° (H1.141) ===
+                    // === HAREKETLI KAPANIŞ SAHNESİ (H1.141) ===
                     const outroElapsed = elapsedSec;
                     const outroDur = totalDur;
 
@@ -2265,7 +2385,7 @@ const RenderWorkerService = {
                     ctx.fillStyle = bgGrad;
                     ctx.fillRect(0, 0, w, h);
 
-                    // 2. Bokeh parÃƒÂ§acÃ„Â±klarÃ„Â± (20 adet, persistent)
+                    // 2. Bokeh parçacıkları (20 adet, persistent)
                     if (!window._outroParticles || window._outroParticles.length === 0) {
                         window._outroParticles = [];
                         for (let p = 0; p < 20; p++) {
@@ -2293,17 +2413,17 @@ const RenderWorkerService = {
                         ctx.fill();
                     });
 
-                    // 3. BaÃ…Å¸lÃ„Â±k satÃ„Â±rlarÃ„Â± Ã¢â‚¬â€ fade-in + slide-up animasyonu
-                    // Dil bazlÃ„Â± outro baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±
+                    // 3. Başlık satırları — fade-in + slide-up animasyonu
+                    // Dil bazlı outro başlığı
                     const lang = jobData?.config?.language || 'tr';
                     const outroTexts = {
-                        tr: ["Abone olmayÃ„Â±,", "beÃ„Å¸enmeyi ve", "paylaÃ…Å¸mayÃ„Â±", "ihmal etmeyin."],
+                        tr: ["Abone olmayı,", "beğenmeyi ve", "paylaşmayı", "ihmal etmeyin."],
                         en: ["Don't forget to", "subscribe, like", "and share."],
                         fr: ["N'oubliez pas de", "vous abonner,", "aimer et partager."],
                         de: ["Vergessen Sie nicht", "zu abonnieren, liken", "und zu teilen."],
                         es: ["No olvides", "suscribirte, dar", "me gusta y compartir."],
-                        ar: ["Ã™â€Ã˜Â§ Ã˜ÂªÃ™â€ Ã˜Â³Ã™Â", "Ã˜Â§Ã™â€Ã˜Â§Ã˜Â´Ã˜ÂªÃ˜Â±Ã˜Â§Ã™Æ’ Ã™Ë†Ã˜Â§Ã™â€Ã˜Â¥Ã˜Â¹Ã˜Â¬Ã˜Â§Ã˜Â¨", "Ã™Ë†Ã˜Â§Ã™â€Ã™â€¦Ã˜Â´Ã˜Â§Ã˜Â±Ã™Æ’Ã˜Â©."],
-                        ru: ["ÄÂÄÂµ ÄÂ·ÄÂ°ÄÂ±Ã‘Æ’ÄÂ´Ã‘Å’Ã‘â€šÄÂµ", "ÄÂ¿ÄÂ¾ÄÂ´ÄÂ¿ÄÂ¸Ã‘ÂÄÂ°Ã‘â€šÃ‘Å’Ã‘ÂÃ‘Â, ÄÂ»ÄÂ°ÄÂ¹ÄÂºÄÂ½Ã‘Æ’Ã‘â€šÃ‘Å’", "ÄÂ¸ ÄÂ¿ÄÂ¾ÄÂ´ÄÂµÄÂ»ÄÂ¸Ã‘â€šÃ‘Å’Ã‘ÂÃ‘Â."]
+                        ar: ["لا تنسَ", "الاشتراك والإعجاب", "والمشاركة."],
+                        ru: ["Не забудьте", "подписаться, лайкнуть", "и поделиться."]
                     };
                     const titleLines = outroTexts[lang] || outroTexts['tr'];
                     let titleFontSize = w > 800 ? 52 : 38;
@@ -2322,7 +2442,7 @@ const RenderWorkerService = {
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
 
-                        // AltÃ„Â±n gradient gÃƒÂ¶lge
+                        // Altın gradient gölge
                         const tg = ctx.createLinearGradient(cx - w * 0.4, 0, cx + w * 0.4, 0);
                         tg.addColorStop(0, '#FFD700');
                         tg.addColorStop(0.3, '#FFA500');
@@ -2331,7 +2451,7 @@ const RenderWorkerService = {
 
                         const yPos = titleStartY + i * titleLh + slideOffset;
 
-                        // GÃƒÂ¶lge
+                        // Gölge
                         ctx.shadowColor = 'rgba(255, 165, 0, 0.6)';
                         ctx.shadowBlur = 20;
                         ctx.shadowOffsetY = 4;
@@ -2342,23 +2462,23 @@ const RenderWorkerService = {
                         ctx.lineJoin = 'round';
                         ctx.strokeText(line, cx, yPos);
 
-                        // AltÃ„Â±n gradient iÃƒÂ§
+                        // Altın gradient iç
                         ctx.fillStyle = tg;
                         ctx.fillText(line, cx, yPos);
 
                         ctx.restore();
                     });
 
-                    // 4. CTA butonlarÃ„Â± Ã¢â‚¬â€ slide-in + nabÃ„Â±z animasyonu
-                    // Dil bazlÃ„Â± CTA buton etiketleri
+                    // 4. CTA butonları — slide-in + nabız animasyonu
+                    // Dil bazlı CTA buton etiketleri
                     const ctaLabels = {
-                        tr: { sub: 'Abone Ol', like: 'BeÃ„Å¸en', share: 'PaylaÃ…Å¸' },
+                        tr: { sub: 'Abone Ol', like: 'Beğen', share: 'Paylaş' },
                         en: { sub: 'Subscribe', like: 'Like', share: 'Share' },
                         fr: { sub: "S'abonner", like: 'Aimer', share: 'Partager' },
                         de: { sub: 'Abonnieren', like: 'Liken', share: 'Teilen' },
                         es: { sub: 'Suscribir', like: 'Me gusta', share: 'Compartir' },
-                        ar: { sub: 'Ã˜Â§Ã˜Â´Ã˜ÂªÃ˜Â±Ã˜Â§Ã™Æ’', like: 'Ã˜Â¥Ã˜Â¹Ã˜Â¬Ã˜Â§Ã˜Â¨', share: 'Ã™â€¦Ã˜Â´Ã˜Â§Ã˜Â±Ã™Æ’Ã˜Â©' },
-                        ru: { sub: 'ÄÅ¸ÄÂ¾ÄÂ´ÄÂ¿ÄÂ¸Ã‘ÂÄÂºÄÂ°', like: 'Äâ€ºÄÂ°ÄÂ¹ÄÂº', share: 'ÄÅ¸ÄÂ¾ÄÂ´ÄÂµÄÂ»ÄÂ¸Ã‘â€šÃ‘Å’Ã‘ÂÃ‘Â' }
+                        ar: { sub: 'اشتراك', like: 'إعجاب', share: 'مشاركة' },
+                        ru: { sub: 'Подписка', like: 'Лайк', share: 'Поделиться' }
                     };
                     const cta = ctaLabels[lang] || ctaLabels['tr'];
                     const buttons = [
@@ -2366,9 +2486,6 @@ const RenderWorkerService = {
                         { label: cta.like, icon: 'heart', delay: 2.2, color1: '#E91E63', color2: '#FF5C8A' },
                         { label: cta.share, icon: 'share', delay: 2.6, color1: '#2196F3', color2: '#64B5F6' }
                     ];
-// ============================================================
-// AI CLIENT Ã¢â‚¬â€ Fallback zinciri: NVIDIA (ÃƒÂ¼cretsiz) Ã¢â€ â€™ Gemini (ÃƒÂ¼cretsiz eski modeller)
-
 
                     const btnAreaY = h * 0.58;
                     const btnRadius = Math.min(w * 0.12, 55);
@@ -2383,14 +2500,14 @@ const RenderWorkerService = {
                         const slideFrom = (1 - btnProgress) * 80;
                         const fadeAlpha = btnProgress;
 
-                        // NabÃ„Â±z efekti (geldikten sonra)
+                        // Nabız efekti (geldikten sonra)
                         const pulseTime = Math.max(0, outroElapsed - btn.delay - 0.5);
                         const pulse = 1 + 0.06 * Math.sin(pulseTime * 3);
 
                         ctx.save();
                         ctx.globalAlpha = fadeAlpha;
 
-                        // Buton dairesi Ã¢â‚¬â€ gradyan
+                        // Buton dairesi — gradyan
                         const btnGrad = ctx.createRadialGradient(bx, by + slideFrom, 0, bx, by + slideFrom, btnRadius * pulse);
                         btnGrad.addColorStop(0, btn.color2);
                         btnGrad.addColorStop(1, btn.color1);
@@ -2401,14 +2518,14 @@ const RenderWorkerService = {
                         ctx.arc(bx, by + slideFrom, btnRadius * pulse, 0, Math.PI * 2);
                         ctx.fill();
 
-                        // Ã„Â°kon (canvas ile ÃƒÂ§iz)
+                        // İkon (canvas ile çiz)
                         ctx.fillStyle = '#FFFFFF';
                         ctx.shadowBlur = 0;
                         const iconSize = btnRadius * 0.45;
                         const iy = by + slideFrom;
 
                         if (btn.icon === 'bell') {
-                            // Ãƒâ€¡an ikonu
+                            // Çan ikonu
                             ctx.beginPath();
                             ctx.arc(bx, iy - iconSize * 0.2, iconSize * 0.5, Math.PI, 0);
                             ctx.lineTo(bx + iconSize * 0.6, iy + iconSize * 0.3);
@@ -2430,7 +2547,7 @@ const RenderWorkerService = {
                             ctx.lineTo(hx + hr * 1.1, hy);
                             ctx.fill();
                         } else if (btn.icon === 'share') {
-                            // PaylaÃ…Å¸ ikonu (baÃ„Å¸lantÃ„Â±)
+                            // Paylaş ikonu (bağlantı)
                             ctx.lineWidth = iconSize * 0.15;
                             ctx.strokeStyle = '#FFFFFF';
                             ctx.lineCap = 'round';
@@ -2438,7 +2555,7 @@ const RenderWorkerService = {
                             ctx.beginPath();
                             ctx.arc(bx - iconSize * 0.25, iy, iconSize * 0.25, Math.PI * 0.7, Math.PI * 2.3);
                             ctx.stroke();
-                            // SaÃ„Å¸ halka
+                            // Sağ halka
                             ctx.beginPath();
                             ctx.arc(bx + iconSize * 0.25, iy, iconSize * 0.25, -Math.PI * 0.3, Math.PI * 1.3);
                             ctx.stroke();
@@ -2456,7 +2573,7 @@ const RenderWorkerService = {
                         ctx.restore();
                     });
 
-                    // 5. Disclaimer Ã¢â‚¬â€ gradient ÃƒÂ§izgi + fade-in yazÃ„Â±
+                    // 5. Disclaimer — gradient çizgi + fade-in yazı
                     const discDelay = 3.5;
                     const discAlpha = Math.max(0, Math.min(1, (outroElapsed - discDelay) / 0.8));
                     const discH = Math.max(100, h * 0.15);
@@ -2465,7 +2582,7 @@ const RenderWorkerService = {
                     ctx.save();
                     ctx.globalAlpha = discAlpha;
 
-                    // Gradient ÃƒÂ§izgi
+                    // Gradient çizgi
                     const lineGrad = ctx.createLinearGradient(0, 0, w, 0);
                     lineGrad.addColorStop(0, 'transparent');
                     lineGrad.addColorStop(0.3, 'rgba(225,29,72,0.5)');
@@ -2485,13 +2602,13 @@ const RenderWorkerService = {
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     const discTexts = {
-                        tr: "Gemini bir yapay zeka modeli olduÃ„Å¸u iÃƒÂ§in kiÃ…Å¸iler de dahil olmak ÃƒÂ¼zere farklÃ„Â± konular hakkÃ„Â±nda yanlÃ„Â±Ã…Å¸ bilgi verebilir.",
+                        tr: "Gemini bir yapay zeka modeli olduğu için kişiler de dahil olmak üzere farklı konular hakkında yanlış bilgi verebilir.",
                         en: "As an AI model, Gemini may provide inaccurate information about various topics, including people.",
-                        fr: "En tant que modÃƒÂ¨le d'IA, Gemini peut fournir des informations inexactes sur divers sujets, y compris les personnes.",
-                        de: "Als KI-Modell kann Gemini ungenaue Informationen zu verschiedenen Themen liefern, einschlieÃƒÅ¸lich Personen.",
-                        es: "Como modelo de IA, Gemini puede proporcionar informaciÃƒÂ³n inexacta sobre diversos temas, incluidas las personas.",
-                        ar: "Ã™Æ’Ã™â€ Ã™â€¦Ã™Ë†Ã˜Â°Ã˜Â¬ Ã˜Â°Ã™Æ’Ã˜Â§Ã˜Â¡ Ã˜Â§Ã˜ÂµÃ˜Â·Ã™â€ Ã˜Â§Ã˜Â¹Ã™Å Ã˜Å’ Ã™â€šÃ˜Â¯ Ã™Å Ã™Ë†Ã™ÂÃ˜Â± Gemini Ã™â€¦Ã˜Â¹Ã™â€Ã™Ë†Ã™â€¦Ã˜Â§Ã˜Âª Ã˜ÂºÃ™Å Ã˜Â± Ã˜Â¯Ã™â€šÃ™Å Ã™â€šÃ˜Â© Ã˜Â­Ã™Ë†Ã™â€ Ã™â€¦Ã™Ë†Ã˜Â§Ã˜Â¶Ã™Å Ã˜Â¹ Ã™â€¦Ã˜Â®Ã˜ÂªÃ™â€Ã™ÂÃ˜Â©Ã˜Å’ Ã˜Â¨Ã™â€¦Ã˜Â§ Ã™ÂÃ™Å  Ã˜Â°Ã™â€Ã™Æ’ Ã˜Â§Ã™â€Ã˜Â£Ã˜Â´Ã˜Â®Ã˜Â§Ã˜Âµ.",
-                        ru: "ÄÅ¡ÄÂ°ÄÂº ÄÂ¼ÄÂ¾ÄÂ´ÄÂµÄÂ»Ã‘Å’ ÄËœÄËœ, Gemini ÄÂ¼ÄÂ¾ÄÂ¶ÄÂµÃ‘â€š ÄÂ¿Ã‘â‚¬ÄÂµÄÂ´ÄÂ¾Ã‘ÂÃ‘â€šÄÂ°ÄÂ²ÄÂ¸Ã‘â€šÃ‘Å’ ÄÂ½ÄÂµÃ‘â€šÄÂ¾Ã‘â€¡ÄÂ½Ã‘Æ’Ã‘Â ÄÂ¸ÄÂ½Ã‘â€ÄÂ¾Ã‘â‚¬ÄÂ¼ÄÂ°Ã‘â€ ÄÂ¸Ã‘Â ÄÂ¿ÄÂ¾ Ã‘â‚¬ÄÂ°ÄÂ·ÄÂ»ÄÂ¸Ã‘â€¡ÄÂ½Ã‘â€¹ÄÂ¼ Ã‘â€šÄÂµÄÂ¼ÄÂ°ÄÂ¼, ÄÂ²ÄÂºÄÂ»Ã‘ÂÃ‘â€¡ÄÂ°Ã‘Â ÄÂ»Ã‘ÂÄÂ´ÄÂµÄÂ¹."
+                        fr: "En tant que modèle d'IA, Gemini peut fournir des informations inexactes sur divers sujets, y compris les personnes.",
+                        de: "Als KI-Modell kann Gemini ungenaue Informationen zu verschiedenen Themen liefern, einschließlich Personen.",
+                        es: "Como modelo de IA, Gemini puede proporcionar información inexacta sobre diversos temas, incluidas las personas.",
+                        ar: "كنموذج ذكاء اصطناعي، قد يوفر Gemini معلومات غير دقيقة حول مواضيع مختلفة، بما في ذلك الأشخاص.",
+                        ru: "Как модель ИИ, Gemini может предоставить неточную информацию по различным темам, включая людей."
                     };
                     const discTxt = discTexts[lang] || discTexts['tr'];
                     const discLines = RenderWorkerService.wrapText(ctx, discTxt, w * 0.88);
@@ -2503,15 +2620,15 @@ const RenderWorkerService = {
 
                     ctx.restore();
 
-                    // ParÃƒÂ§acÃ„Â±klarÃ„Â± temizle (sahne bittiÃ„Å¸inde)
+                    // Parçacıkları temizle (sahne bittiğinde)
                     if (progress > 0.95) window._outroParticles = [];
                 }
                 ctx.restore();
                 globalRenderedSec += 1 / FPS; if (videoTrack && videoTrack.requestFrame) videoTrack.requestFrame(); await nextFrame();
             }
-            // Ses bitene kadar bekle Ã¢â‚¬â€ sonraki sahne baÃ…Å¸lamasÃ„Â±n
+            // Ses bitene kadar bekle — sonraki sahne başlamasın
             if (audioEndPromise) await audioEndPromise;
-            addSystemLog(`Sahne ${isThumbnail ? 'kapak' : isOutro ? 'kapanÃ„Â±Ã…Å¸' : slideIndex} render edildi.`, 'success');
+            addSystemLog(`Sahne ${isThumbnail ? 'kapak' : isOutro ? 'kapanış' : slideIndex} render edildi.`, 'success');
         };
 
         try {
@@ -2555,7 +2672,7 @@ const RenderWorkerService = {
                                 bgmSource.connect(masterGain); masterGain.connect(audioDest); bgmSource.start(0);
                             }
                         }
-                    } catch (e) { console.warn("Yerel mÃƒÂ¼zik okunamadÃ„Â±", e); }
+                    } catch (e) { console.warn("Yerel muzik okunamadi", e); }
                 } else {
                     try {
                         const track = await AssetManagerService.getMusicFromLib(musicId);
@@ -2572,7 +2689,7 @@ const RenderWorkerService = {
                             masterGain.gain.value = 0.3;
                             bgmSource.connect(masterGain); masterGain.connect(audioDest); bgmSource.start(0);
                         }
-                    } catch (e) { console.warn("MÃƒÂ¼zik okunamadÃ„Â±", e); }
+                    } catch (e) { console.warn("Müzik okunamadı", e); }
                 }
             };
             let bgmInitialized = false;
@@ -2589,11 +2706,11 @@ const RenderWorkerService = {
             const recorder = new MediaRecorder(combinedStream, { mimeType, audioBitsPerSecond: 192000, videoBitsPerSecond: 2000000 });
             const chunks = []; recorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); }; recorder.start(100);
 
-            sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 10, text: 'Clickbait Kapak OluÃ…Å¸turuluyor...' });
+            sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 10, text: 'Clickbait Kapak Oluşturuluyor...' });
             await renderScene(tImg, jobData.script.thumbnailText, jobData.assets.thumbnailAudio, rawKapakDur, true, false, null, 0, null, jobData.config.transition);
 
-            // Sadece bloÃ„Å¸un 1. sahnesi sabit gÃƒÂ¶rsel kullanÃ„Â±r (S1 gÃƒÂ¶sterimi)
-            // 2. ve 3. sahneler AI gÃƒÂ¶rseli kullanÃ„Â±r
+            // Sadece bloğun 1. sahnesi sabit görsel kullanır (S1 gösterimi)
+            // 2. ve 3. sahneler AI görseli kullanır
             const slideIsCustom = [];
             const blocks = jobData.script.imageBlocks || [];
             let gIdx = 0;
@@ -2605,7 +2722,7 @@ const RenderWorkerService = {
             }
 
             const WINDOW_SIZE = 5;
-                // Ã„Â°lk WINDOW_SIZE gÃƒÂ¶rseli ÃƒÂ¶nceden yÃƒÂ¼kle Ã¢â‚¬â€ sahneler arasÃ„Â± gecikmeyi ÃƒÂ¶nle
+                // İlk WINDOW_SIZE görseli önceden yükle — sahneler arası gecikmeyi önle
                 const preloadedImages = [];
                 for (let pi = 0; pi < Math.min(WINDOW_SIZE, jobData.script.videoSlides.length); pi++) {
                     preloadedImages[pi] = await NetworkUtils.loadImage(jobData.assets.images[pi]) || tImg;
@@ -2614,17 +2731,17 @@ const RenderWorkerService = {
                 if (useForceExact && globalRenderedSec >= limitSec) break;
                 const slide = jobData.script.videoSlides[i];
                 sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: Math.min(80, 20 + ((i + 1) / jobData.script.videoSlides.length) * 60), text: `Sahne ${i + 1} Render Ediliyor...` });
-                // BAÃ…ÂLIKLAR sahnesi image yÃƒÂ¼kleme atla
+                // BAŞLIKLAR sahnesi image yükleme atla
                 const isBasliklarScene = slide._isBasliklarList && slide._basliklar;
-                // Ãƒâ€“nceden yÃƒÂ¼klenmiÃ…Å¸ gÃƒÂ¶rseli kullan, yoksa yÃƒÂ¼kle
+                // Önceden yüklenmiş görseli kullan, yoksa yükle
                 const sImg = isBasliklarScene ? null : (preloadedImages[i] || await NetworkUtils.loadImage(jobData.assets.images[i]) || tImg);
-                // Sonraki gÃƒÂ¶rseli arka planda ÃƒÂ¶nceden yÃƒÂ¼kle
+                // Sonraki görseli arka planda önceden yükle
                 const nextIdx = i + 1;
                 if (nextIdx < jobData.script.videoSlides.length && !preloadedImages[nextIdx] && !jobData.script.videoSlides[nextIdx]._isBasliklarList) {
                     NetworkUtils.loadImage(jobData.assets.images[nextIdx]).then(img => { preloadedImages[nextIdx] = img || tImg; }).catch(() => {});
                 }
                 const isCustomImg = !!slideIsCustom[i];
-                // BAÃ…ÂLIKLAR sahnesi Ã¢â‚¬â€ ÃƒÂ¶zel render
+                // BAŞLIKLAR sahnesi — özel render
                     if (slide._isBasliklarList && slide._basliklar) {
                         const { exactDur, totalDur, audioEndPromise } = await playAudio(jobData.assets.audio[i], null, slide.spokenText);
                         const totalFrames = Math.max(1, Math.round(totalDur * FPS));
@@ -2641,7 +2758,7 @@ const RenderWorkerService = {
                             ctx.fillStyle = bgGrad;
                             ctx.fillRect(0, 0, w, h);
                             
-                            // BaÃ…Å¸lÃ„Â±k
+                            // Başlık
                             const titleFontSize = w > 800 ? 60 : 45;
                             ctx.font = `900 ${titleFontSize}px ${fontFamily}`;
                             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -2650,11 +2767,11 @@ const RenderWorkerService = {
                             ctx.fillText(slide.topText, cx, h * 0.08);
                             ctx.shadowBlur = 0;
                             
-                            // KÃ„Â±rmÃ„Â±zÃ„Â± ÃƒÂ§izgi
+                            // Kırmızı çizgi
                             ctx.strokeStyle = '#E30A17'; ctx.lineWidth = 3;
                             ctx.beginPath(); ctx.moveTo(w * 0.1, h * 0.12); ctx.lineTo(w * 0.9, h * 0.12); ctx.stroke();
                             
-                            // BaÃ…Å¸lÃ„Â±klar
+                            // Başlıklar
                             const basliklar = slide._basliklar;
                             let listFontSize = w > 800 ? 42 : 32;
                             ctx.font = `700 ${listFontSize}px ${fontFamily}`;
@@ -2681,9 +2798,9 @@ const RenderWorkerService = {
                             await nextFrame();
                         }
                         if (audioEndPromise) await audioEndPromise;
-                        addSystemLog(`BAÃ…ÂLIKLAR sahnesi render edildi.`, 'success');
+                        addSystemLog(`BAŞLIKLAR sahnesi render edildi.`, 'success');
                     } else if (slide._isKaynaklar && slide._kaynaklar) {
-                        // KAYNAKLAR sahnesi Ã¢â‚¬â€ ÃƒÂ¶zel render
+                        // KAYNAKLAR sahnesi — özel render
                         const { exactDur, totalDur, audioEndPromise } = await playAudio(jobData.assets.audio[i], null, slide.spokenText);
                         const totalFrames = Math.max(1, Math.round(totalDur * FPS));
                         
@@ -2694,13 +2811,13 @@ const RenderWorkerService = {
                             ctx.fillStyle = '#030712';
                             ctx.fillRect(0, 0, w, h);
                             
-                            // BaÃ…Å¸lÃ„Â±k
+                            // Başlık
                             ctx.font = `900 ${w > 800 ? 50 : 38}px ${fontFamily}`;
                             ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
                             ctx.fillStyle = '#E30A17';
                             ctx.fillText('KAYNAKLAR', cx, h * 0.06);
                             
-                            // Ãƒâ€¡izgi
+                            // Çizgi
                             ctx.strokeStyle = '#E30A17'; ctx.lineWidth = 2;
                             ctx.beginPath(); ctx.moveTo(w * 0.1, h * 0.09); ctx.lineTo(w * 0.9, h * 0.09); ctx.stroke();
                             
@@ -2711,7 +2828,7 @@ const RenderWorkerService = {
                             let currentY = h * 0.13;
                             
                             kaynaklar.forEach((k, idx) => {
-                                // BaÃ…Å¸lÃ„Â±k
+                                // Başlık
                                 ctx.fillStyle = '#FFD700';
                                 ctx.textAlign = 'left';
                                 ctx.font = `700 ${listFontSize}px ${fontFamily}`;
@@ -2732,7 +2849,7 @@ const RenderWorkerService = {
                                     currentY += listFontSize * 0.8;
                                 }
                                 
-                                currentY += listFontSize * 0.5; // BoÃ…Å¸luk
+                                currentY += listFontSize * 0.5; // Boşluk
                             });
                             
                             globalRenderedSec += 1 / FPS;
@@ -2744,7 +2861,7 @@ const RenderWorkerService = {
                     } else {
                         await renderScene(sImg, slide.spokenText, jobData.assets.audio[i], rawSlideSecs[i], false, false, slide.topText, i + 1, jobData.script.chartData, jobData.config.transition, isCustomImg, slide._zoomCoords || null);
                     }
-                // Sliding window: serbest bÃ„Â±rakÃ„Â±lan gÃƒÂ¶rselleri temizle
+                // Sliding window: serbest bırakılan görselleri temizle
                 if (i >= WINDOW_SIZE) {
                     const releaseIdx = i - WINDOW_SIZE;
                     jobData.assets.images[releaseIdx] = null;
@@ -2752,7 +2869,7 @@ const RenderWorkerService = {
                 }
             }
 
-            // TÃƒÂ¼m slaytlarÃ„Â±n spokenText'inden son sÃƒÂ¶zÃƒÂ¼ ÃƒÂ§Ã„Â±kar (tekrar ÃƒÂ¶nlemi)
+            // Tüm slaytların spokenText'inden son sözü çıkar (tekrar önlemi)
             if (jobData.script.sonSoz && jobData.script.videoSlides.length > 0) {
                 const sonSozRegex = new RegExp(jobData.script.sonSoz.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
                 let removedCount = 0;
@@ -2762,27 +2879,27 @@ const RenderWorkerService = {
                         removedCount++;
                     }
                 });
-                if (removedCount > 0) addSystemLog(`Son sÃƒÂ¶z ${removedCount} slayttan ÃƒÂ§Ã„Â±karÃ„Â±ldÃ„Â± (tekrar ÃƒÂ¶nlemi).`, 'info');
+                if (removedCount > 0) addSystemLog(`Son söz ${removedCount} slayttan çıkarıldı (tekrar önlemi).`, 'info');
             }
 
-            // Son sÃƒÂ¶z sahnesi Ã¢â‚¬â€ daima render et (yorum varsa yorum, yoksa son sÃƒÂ¶z)
+            // Son söz sahnesi — daima render et (yorum varsa yorum, yoksa son söz)
             const hasYorumForScene = jobData.config.yorum && jobData.config.yorum.trim().length > 0;
             if ((jobData.script.sonSoz || hasYorumForScene) && (!useForceExact || globalRenderedSec < limitSec)) {
-                sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 85, text: 'Son SÃƒÂ¶z Sahnesi Render Ediliyor...' });
+                sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 85, text: 'Son Söz Sahnesi Render Ediliyor...' });
                 const isSingleMedia = (jobData.imageQueue || []).length <= 1;
                 await renderSonSozScene(jobData.script.sonSoz || '', jobData.assets.sonSozAudio, rawSonSozDur, isSingleMedia);
             }
-            if (!useForceExact || globalRenderedSec < limitSec) { sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 90, text: 'KapanÃ„Â±Ã…Å¸ Render Ediliyor...' }); await renderScene(outroImg, jobData.script.lastQuote, jobData.assets.outroAudio, rawOutroDur, false, true, null, 99, null, jobData.config.transition); }
+            if (!useForceExact || globalRenderedSec < limitSec) { sysEventBus.emit('PROGRESS', { step: 'RENDER', percent: 90, text: 'Kapanış Render Ediliyor...' }); await renderScene(outroImg, jobData.script.lastQuote, jobData.assets.outroAudio, rawOutroDur, false, true, null, 99, null, jobData.config.transition); }
 
             if (bgmSource) { try { bgmSource.stop(); bgmSource.disconnect(); } catch(e){} } if (bgmNode) { try { bgmNode.disconnect(); } catch(e){} } if (masterGain) { try { masterGain.disconnect(); } catch(e){} }
             silentOsc.stop(); silentOsc.disconnect(); keepAliveOsc.stop(); keepAliveOsc.disconnect(); keepAliveGain.disconnect();
 
-            try { const totalFrames = Math.floor(rawCushion * scaleFactor * FPS); for (let i = 0; i < totalFrames; i++) { if (useForceExact && globalRenderedSec >= limitSec) break; globalRenderedSec += 1 / FPS; await nextFrame(); } } catch (e) { console.warn("KapanÃ„Â±Ã…Å¸ bekleme hatasÃ„Â±:", e); }
+            try { const totalFrames = Math.floor(rawCushion * scaleFactor * FPS); for (let i = 0; i < totalFrames; i++) { if (useForceExact && globalRenderedSec >= limitSec) break; globalRenderedSec += 1 / FPS; await nextFrame(); } } catch (e) { console.warn("Kapanış bekleme hatası:", e); }
 
             timerWorker.postMessage('stop'); timerWorker.terminate();
 
             return new Promise((resolve, reject) => {
-                recorder.onstop = () => { const blob = new Blob(chunks, { type: mimeType }); if (blob.size === 0) return reject(new Error("Video oluÃ…Å¸turulamadÃ„Â± (0 Bayt).")); resolve(URL.createObjectURL(blob)); };
+                recorder.onstop = () => { const blob = new Blob(chunks, { type: mimeType }); if (blob.size === 0) return reject(new Error("Video oluşturulamadı (0 Bayt).")); resolve(URL.createObjectURL(blob)); };
                 if (recorder.state !== 'inactive') { try { recorder.requestData(); } catch (e) { } setTimeout(() => recorder.stop(), 100); } else resolve(URL.createObjectURL(new Blob(chunks, { type: mimeType })));
             });
         } catch (e) { if (typeof timerWorker !== 'undefined') timerWorker.terminate(); throw new Error(`Render failed: ${e.message}`); }
@@ -2798,12 +2915,12 @@ class WorkflowCoordinator {
         const uploadedMedia = (inputType === 'media' && Array.isArray(inputData)) ? inputData : [];
         const allImages = [];
         if (customImages.length > 0 && uploadedMedia.length > 0) {
-            // Her sabit gÃƒÂ¶rsel iÃƒÂ§in 1 medya eÃ…Å¸leÃ…Å¸tir: S1+M1, S2+M2, S3+M3
+            // Her sabit görsel için 1 medya eşleştir: S1+M1, S2+M2, S3+M3
             const pairCount = Math.min(customImages.length, uploadedMedia.length, 10);
             for (let i = 0; i < pairCount; i++) {
                 allImages.push({ type: 'custom', data: customImages[i], mediaItem: uploadedMedia[i] });
             }
-            addSystemLog(`EÃ…Å¸leÃ…Å¸tirme: ${pairCount} blok (S1+M1, S2+M2, ...)`, 'info');
+            addSystemLog(`Eşleştirme: ${pairCount} blok (S1+M1, S2+M2, ...)`, 'info');
         } else if (customImages.length > 0) {
             for (const img of customImages) allImages.push({ type: 'custom', data: img });
         } else {
@@ -2818,27 +2935,27 @@ class WorkflowCoordinator {
     }
     async resumeWorkflow(canvasRef) {
         try {
-            if (!this.state || !this.state.jobId) { const saved = await AssetManagerService.getPendingJob(); if (saved) this.state = saved; else throw new Error("Bekleyen iÃ…Å¸lem bulunamadÃ„Â±."); }
+            if (!this.state || !this.state.jobId) { const saved = await AssetManagerService.getPendingJob(); if (saved) this.state = saved; else throw new Error("Bekleyen işlem bulunamadı."); }
             sysEventBus.emit('WORKFLOW_STATE', { status: 'RUNNING', job: this.state });
 
             if (this.state.status === 'INIT') {
-                // GÃƒÂ¼zel sÃƒÂ¶z modu Ã¢â€ â€™ eski akÃ„Â±Ã…Å¸ (deÃ„Å¸iÃ…Å¸medi)
+                // Güzel söz modu → eski akış (değişmedi)
                 if (this.state.config.tip === 'guzel_soz' || this.state.config.tip === 'iddia_analizi') {
                     let startT = performance.now();
-                    const tipLabel = 'GÃƒÂ¼zel SÃƒÂ¶z';
-                    await this.updateProgress(10, `${tipLabel} yapÃ„Â±lÃ„Â±yor...`, 'LOGIC');
+                    const tipLabel = 'Güzel Söz';
+                    await this.updateProgress(10, `${tipLabel} yapılıyor...`, 'LOGIC');
                     const script = await LogicEngineService.analyzeContent(this.state.inputData, this.state.inputType, this.state.config);
                     this.state.script = script;
                     this.state.status = 'GENERATING_ASSETS';
                     await AssetManagerService.saveJobState(this.state);
-                    addSystemLog(`${tipLabel} tamamlandÃ„Â± (${((performance.now() - startT) / 1000).toFixed(1)}s).`, 'success');
+                    addSystemLog(`${tipLabel} tamamlandı (${((performance.now() - startT) / 1000).toFixed(1)}s).`, 'success');
                 } else {
-                    // YENÃ„Â° AKIÃ…Â: Her gÃƒÂ¶rsel iÃƒÂ§in sÃ„Â±rayla sahne ÃƒÂ¼ret
+                    // YENİ AKIŞ: Her görsel için sırayla sahne üret
                     const queue = this.state.imageQueue || [];
                     const totalImages = queue.length;
-                    if (totalImages === 0) throw new Error("Ã„Â°Ã…Å¸lenecek gÃƒÂ¶rsel bulunamadÃ„Â±. LÃƒÂ¼tfen en az bir sabit gÃƒÂ¶rsel veya medya yÃƒÂ¼kleyin.");
+                    if (totalImages === 0) throw new Error("İşlenecek görsel bulunamadı. Lütfen en az bir sabit görsel veya medya yükleyin.");
 
-                    addSystemLog(`Toplam ${totalImages} gÃƒÂ¶rsel iÃ…Å¸lenecek.`, 'info');
+                    addSystemLog(`Toplam ${totalImages} görsel işlenecek.`, 'info');
                     let previousContext = "";
 
                     for (let i = this.state.processedImageCount || 0; i < totalImages; i++) {
@@ -2858,7 +2975,7 @@ class WorkflowCoordinator {
                                 blockResult = await LogicEngineService.analyzeContentForImage(this.state.inputData, this.state.inputType, this.state.config, i, totalImages, previousContext);
                             }
                         } catch (e) {
-                            addSystemLog(`Blok ${blockNum} analiz hatasÃ„Â±: ${e.message}`, 'error');
+                            addSystemLog(`Blok ${blockNum} analiz hatası: ${e.message}`, 'error');
                             blockResult = { videoSlides: [], thumbnailText: '', thumbnailImagePrompt: '' };
                         }
 
@@ -2873,7 +2990,7 @@ class WorkflowCoordinator {
                         }
                         if (blockResult.lastQuote) this.state.script.lastQuote = blockResult.lastQuote;
 
-                        // Normal slide'larÃ„Â± her zaman ekle (baÃ…Å¸lÃ„Â±k olsa bile)
+                        // Normal slide'ları her zaman ekle (başlık olsa bile)
                         this.state.script.imageBlocks.push({
                             imageIndex: i,
                             imageType: imgItem.type,
@@ -2881,11 +2998,11 @@ class WorkflowCoordinator {
                             videoSlides: blockResult.videoSlides || []
                         });
 
-                        // BaÃ…Å¸lÃ„Â±klarÃ„Â± topla Ã¢â‚¬â€ sadece birden fazla gÃƒÂ¶rsel varsa
+                        // Başlıkları topla — sadece birden fazla görsel varsa
                         if (queue.length > 1 && blockResult.gazeteBasliklari && blockResult.gazeteBasliklari.length > 0) {
                             if (!this.state.script._allBasliklar) this.state.script._allBasliklar = [];
                             this.state.script._allBasliklar.push(...blockResult.gazeteBasliklari);
-                            addSystemLog(`GÃƒÂ¶rsel ${blockNum}: ${blockResult.gazeteBasliklari.length} baÃ…Å¸lÃ„Â±k ÃƒÂ§Ã„Â±karÃ„Â±ldÃ„Â±.`, 'success');
+                            addSystemLog(`Görsel ${blockNum}: ${blockResult.gazeteBasliklari.length} başlık çıkarıldı.`, 'success');
                         }
 
                         const slideTexts = (blockResult.videoSlides || []).map(s => s.spokenText).join(' ');
@@ -2893,31 +3010,31 @@ class WorkflowCoordinator {
 
                         this.state.processedImageCount = i + 1;
                         await AssetManagerService.saveJobState(this.state);
-                        addSystemLog(`Blok ${blockNum}/${totalImages} tamamlandÃ„Â± (${(blockResult.videoSlides || []).length} sahne).`, 'success');
+                        addSystemLog(`Blok ${blockNum}/${totalImages} tamamlandı (${(blockResult.videoSlides || []).length} sahne).`, 'success');
                     }
 
-                    // SENARYO KONTROLÃƒÅ“: BaÃ…Å¸lÃ„Â±klar sayfasÃ„Â± oluÃ…Å¸turulsun mu?
+                    // SENARYO KONTROLÜ: Başlıklar sayfası oluşturulsun mu?
                     const allBasliklar = this.state.script._allBasliklar || [];
                     const totalImages2 = queue.length;
 
                     if (allBasliklar.length >= 1 && queue.length > 1) {
-                        // SENARYO 2 veya 3: TÃƒÅ“M baÃ…Å¸lÃ„Â±klardan ortak clickbait baÃ…Å¸lÃ„Â±k oluÃ…Å¸tur
+                        // SENARYO 2 veya 3: TÜM başlıklardan ortak clickbait başlık oluştur
                         const allHeadlines = allBasliklar.map(b => b.baslik).join('. ');
                         try {
                             const clickbaitText = await callAI(
-                                'Sen bir sosyal medya editÃƒÂ¶rÃƒÂ¼sÃƒÂ¼n. SADECE baÃ…Å¸lÃ„Â±k ÃƒÂ¼retirsin, baÃ…Å¸ka metin yazmazsÃ„Â±n.',
-                                `Bu haber baÃ…Å¸lÃ„Â±klarÃ„Â±ndan en etkileyici, clickbait bir tek baÃ…Å¸lÃ„Â±k oluÃ…Å¸tur (maksimum 10 kelime, bÃƒÂ¼yÃƒÂ¼k harfler, sansasyonel):\n\n${allHeadlines}\n\nSADECE baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â± yaz.`,
+                                'Sen bir sosyal medya editörüsün. SADECE başlık üretirsin, başka metin yazmazsın.',
+                                `Bu haber başlıklarından en etkileyici, clickbait bir tek başlık oluştur (maksimum 10 kelime, büyük harfler, sansasyonel):\n\n${allHeadlines}\n\nSADECE başlığı yaz.`,
                                 { temperature: 0.9, max_tokens: 60 }
                             );
                             if (clickbaitText && clickbaitText.trim().length > 3) {
                                 this.state.script.thumbnailText = trUpper(clickbaitText.trim());
-                                addSystemLog(`Ortak clickbait baÃ…Å¸lÃ„Â±k: "${clickbaitText}"`, 'success');
+                                addSystemLog(`Ortak clickbait başlık: "${clickbaitText}"`, 'success');
                             }
                         } catch (e) {
-                            addSystemLog(`Clickbait API hatasÃ„Â±: ${e.message}`, 'warn');
+                            addSystemLog(`Clickbait API hatası: ${e.message}`, 'warn');
                         }
                         
-                        // Fallback: API baÃ…Å¸arÃ„Â±sÃ„Â±z olursa baÃ…Å¸lÃ„Â±klardan clickbait oluÃ…Å¸tur
+                        // Fallback: API başarısız olursa başlıklardan clickbait oluştur
                         if (!this.state.script.thumbnailText || this.state.script.thumbnailText.length < 5) {
                             var headlines = allBasliklar.map(function(b) { return b.baslik; });
                             var longest = headlines.reduce(function(a, b) { return a.length > b.length ? a : b; }, '');
@@ -2925,18 +3042,18 @@ class WorkflowCoordinator {
                             addSystemLog('Fallback clickbait: ' + longest, 'info');
                         }
 
-                        // BAÃ…ÂLIKLAR sayfasÃ„Â± + her baÃ…Å¸lÃ„Â±k iÃƒÂ§in ayrÃ„Â± sahne
+                        // BAŞLIKLAR sayfası + her başlık için ayrı sahne
                         const sourceLabel = trUpper(this.state.config?.sourceName || 'Gazete');
-                        const basliklarList = allBasliklar.slice(0, 10).map(b => b.baslik).join('. '); // Max 10 baÃ…Å¸lÃ„Â±k
-                        const ozetSpoken = `${sourceLabel} baÃ…Å¸lÃ„Â±klarÃ„Â±nda bugÃƒÂ¼n ${allBasliklar.length} ÃƒÂ¶nemli baÃ…Å¸lÃ„Â±k var. ${basliklarList}.`;
+                        const basliklarList = allBasliklar.slice(0, 10).map(b => b.baslik).join('. '); // Max 10 başlık
+                        const ozetSpoken = `${sourceLabel} başlıklarında bugün ${allBasliklar.length} önemli başlık var. ${basliklarList}.`;
 
-                        // BAÃ…ÂLIKLAR sayfasÃ„Â±nÃ„Â± EN BAÃ…ÂA ekle (thumbnail'dan sonra)
+                        // BAŞLIKLAR sayfasını EN BAŞA ekle (thumbnail'dan sonra)
                         this.state.script.imageBlocks.unshift({
                             imageIndex: 0,
                             imageType: 'ai',
                             customImage: null,
                             videoSlides: [{
-                                topText: `${sourceLabel} BAÃ…ÂLIKLARI`,
+                                topText: `${sourceLabel} BAŞLIKLARI`,
                                 spokenText: ozetSpoken,
                                 imagePrompts: [this.state.script.thumbnailImagePrompt || 'Turkish newspaper front page'],
                                 _isBasliklarList: true,
@@ -2944,7 +3061,7 @@ class WorkflowCoordinator {
                             }]
                         });
 
-                        // Her baÃ…Å¸lÃ„Â±k iÃƒÂ§in ayrÃ„Â± sahne ekle
+                        // Her başlık için ayrı sahne ekle
                         allBasliklar.forEach((baslik, idx) => {
                             this.state.script.imageBlocks.push({
                                 imageIndex: 0,
@@ -2959,13 +3076,13 @@ class WorkflowCoordinator {
                             });
                         });
 
-                        addSystemLog(`BAÃ…ÂLIKLAR sayfasÃ„Â± oluÃ…Å¸turuldu: ${allBasliklar.length} baÃ…Å¸lÃ„Â±k.`, 'success');
+                        addSystemLog(`BAŞLIKLAR sayfası oluşturuldu: ${allBasliklar.length} başlık.`, 'success');
                     } else {
-                        // SENARYO 1: Tek baÃ…Å¸lÃ„Â±k, baÃ…Å¸ka gÃƒÂ¶rsel yok Ã¢â€ â€™ BAÃ…ÂLIKLAR sayfasÃ„Â± yok
-                        addSystemLog('Tek baÃ…Å¸lÃ„Â±k, BAÃ…ÂLIKLAR sayfasÃ„Â± atlandÃ„Â±.', 'info');
+                        // SENARYO 1: Tek başlık, başka görsel yok → BAŞLIKLAR sayfası yok
+                        addSystemLog('Tek başlık, BAŞLIKLAR sayfası atlandı.', 'info');
                     }
 
-                    // Kaynaklar sahnesi oluÃ…Å¸tur (Son SÃƒÂ¶z'den ÃƒÂ¶nce) Ã¢â‚¬â€ haber modunda atla
+                    // Kaynaklar sahnesi oluştur (Son Söz'den önce) — haber modunda atla
                     if (this.state.config.tip !== 'haber' && this.state.script._kaynaklar && this.state.script._kaynaklar.length > 0) {
                         const kaynaklarText = this.state.script._kaynaklar.map(k => `${k.baslik}: ${k.url}`).join('\n');
                         const kaynaklarSpoken = "Kaynaklar ve referanslar. " + this.state.script._kaynaklar.map(k => k.baslik).join('. ') + ".";
@@ -2984,7 +3101,7 @@ class WorkflowCoordinator {
                         addSystemLog('Kaynaklar sahnesi eklendi.', 'success');
                     }
 
-                    // Kaynaklar sahnesi (Son SÃƒÂ¶z'den ÃƒÂ¶nce)
+                    // Kaynaklar sahnesi (Son Söz'den önce)
                     if (this.state.script && this.state.script.iddialar && this.state.script.iddialar.length > 0) {
                         var allKaynaklar = [];
                         this.state.script.iddialar.forEach(function(iddia) {
@@ -3006,13 +3123,13 @@ class WorkflowCoordinator {
                         }
                     }
 
-                    // TÃƒÂ¼m bloklarÃ„Â± dÃƒÂ¼z videoSlides dizisine ÃƒÂ§evir// TÃƒÂ¼m bloklarÃ„Â± dÃƒÂ¼z videoSlides dizisine ÃƒÂ§evir (render iÃƒÂ§in)
+                    // Tüm blokları düz videoSlides dizisine çevir// Tüm blokları düz videoSlides dizisine çevir (render için)
                     this.state.script.videoSlides = [];
                     for (const block of this.state.script.imageBlocks) {
                         this.state.script.videoSlides.push(...block.videoSlides);
                     }
-                    addSystemLog(`INIT tamamlandÃ„Â±: ${this.state.script.imageBlocks.length} blok, ${this.state.script.videoSlides.length} sahne.`, 'success');
-                    addSystemLog(`Blok detaylarÃ„Â±: ${this.state.script.imageBlocks.map((b, i) => `B${i + 1}=${b.videoSlides.length}s`).join(', ')}`, 'info');
+                    addSystemLog(`INIT tamamlandı: ${this.state.script.imageBlocks.length} blok, ${this.state.script.videoSlides.length} sahne.`, 'success');
+                    addSystemLog(`Blok detayları: ${this.state.script.imageBlocks.map((b, i) => `B${i + 1}=${b.videoSlides.length}s`).join(', ')}`, 'info');
 
                     this.state.status = 'GENERATING_ASSETS';
                     await AssetManagerService.saveJobState(this.state);
@@ -3023,7 +3140,7 @@ class WorkflowCoordinator {
                 const imgStyle = this.state.config.imageStyle || 'cinematic'; const imgRes = this.state.config.resolution || '4K';
 
                 if (this.state.script._isGuzelSoz) {
-                    addSystemLog('GÃƒÂ¼zel sÃƒÂ¶z modu: gÃƒÂ¶rseller ve ses ÃƒÂ¼retiliyor...', 'info');
+                    addSystemLog('Güzel söz modu: görseller ve ses üretiliyor...', 'info');
                     const slideCount = this.state.script._sceneCount || 3;
                     const quoteTextForImage = this.state.script.videoSlides[0]?.spokenText || "";
                     const emotionForImage = this.state.script._emotion || analyzeQuoteEmotion(quoteTextForImage);
@@ -3033,9 +3150,9 @@ class WorkflowCoordinator {
                         const slide = this.state.script.videoSlides[i];
                         if (!this.state.assets.images[i]) {
                             try {
-                                // GerÃƒÂ§ek gÃƒÂ¶rsel varsa onu kullan (AtatÃƒÂ¼rk vb.)
+                                // Gerçek görsel varsa onu kullan (Atatürk vb.)
                                 if (realUrls[i]) {
-                                    addSystemLog(`  GÃƒÂ¶rsel ${i + 1}: GerÃƒÂ§ek gÃƒÂ¶rsel kullanÃ„Â±lÃ„Â±yor...`, 'info');
+                                    addSystemLog(`  Görsel ${i + 1}: Gerçek görsel kullanılıyor...`, 'info');
                                     this.state.assets.images[i] = realUrls[i];
                                 } else {
                                     this.state.assets.images[i] = await MediaSynthesisService.generateImage(
@@ -3043,9 +3160,9 @@ class WorkflowCoordinator {
                                         imgStyle, imgRes, true, emotionForImage, quoteTextForImage
                                     );
                                 }
-                                addSystemLog(`  GÃƒÂ¶rsel ${i + 1}/${slideCount} tamamlandÃ„Â±.`, 'success');
+                                addSystemLog(`  Görsel ${i + 1}/${slideCount} tamamlandı.`, 'success');
                             } catch (e) {
-                                addSystemLog(`  GÃƒÂ¶rsel ${i + 1} hatasÃ„Â±, fallback kullanÃ„Â±lÃ„Â±yor.`, 'warn');
+                                addSystemLog(`  Görsel ${i + 1} hatası, fallback kullanılıyor.`, 'warn');
                                 this.state.assets.images[i] = this.state.assets.thumbnail;
                             }
                         }
@@ -3063,25 +3180,25 @@ class WorkflowCoordinator {
                     if (allMusic.length > 0) {
                         const matchedTrack = matchMusicToEmotion(emotionForImage, allMusic);
                         const chosenTrack = matchedTrack || allMusic[Math.floor(Math.random() * allMusic.length)];
-                        addSystemLog(`MÃƒÂ¼zik seÃƒÂ§ildi: ${chosenTrack.name} (duygu: ${emotionForImage})`, 'success');
+                        addSystemLog(`Müzik seçildi: ${chosenTrack.name} (duygu: ${emotionForImage})`, 'success');
                         this.state.script._bgmId = chosenTrack.id;
                         this.state.script._bgmName = chosenTrack.name;
                         this.state.preferences.ambientSound = chosenTrack.id;
                         this.state.preferences.customBgMusicName = chosenTrack.name;
                         this.state.preferences.customBgMusicId = chosenTrack.id;
                     } else {
-                        addSystemLog('MÃƒÂ¼zik kÃƒÂ¼tÃƒÂ¼phanesi boÃ…Å¸, mÃƒÂ¼zik eklenmedi.', 'warn');
+                        addSystemLog('Müzik kütüphanesi boş, müzik eklenmedi.', 'warn');
                     }
 
-                    await this.updateProgress(70, 'GÃƒÂ¼zel sÃƒÂ¶z hazÃ„Â±r...', 'ASSETS');
+                    await this.updateProgress(70, 'Güzel söz hazır...', 'ASSETS');
                 } else {
-                if (!this.state.assets.thumbnail) { addSystemLog('Kapak resmi ÃƒÂ§izimi...', 'info'); this.state.assets.thumbnail = await MediaSynthesisService.generateImage(this.state.script.thumbnailImagePrompt || "Dramatic news event", imgStyle, imgRes); addSystemLog('Kapak resmi tamamlandÃ„Â±.', 'success'); }
+                if (!this.state.assets.thumbnail) { addSystemLog('Kapak resmi çizimi...', 'info'); this.state.assets.thumbnail = await MediaSynthesisService.generateImage(this.state.script.thumbnailImagePrompt || "Dramatic news event", imgStyle, imgRes); addSystemLog('Kapak resmi tamamlandı.', 'success'); }
 
                 const customImages = this.state.config.customSceneImages || [];
                 this.state.customImageCount = customImages.length;
 
-                // Sabit gÃƒÂ¶rsel SADECE bloÃ„Å¸un 1. sahnesine atanÃ„Â±r (S1 gÃƒÂ¶sterimi)
-                // 2. ve 3. sahneler AI tarafÃ„Â±ndan ÃƒÂ¼retilir (M1'i anlatan gÃƒÂ¶rseller)
+                // Sabit görsel SADECE bloğun 1. sahnesine atanır (S1 gösterimi)
+                // 2. ve 3. sahneler AI tarafından üretilir (M1'i anlatan görseller)
                 const blocks = this.state.script.imageBlocks || [];
                 let globalIdx = 0;
                 for (let b = 0; b < blocks.length; b++) {
@@ -3090,16 +3207,16 @@ class WorkflowCoordinator {
                     const blockCustomImg = block.customImage || customImages[b];
                     if (block.imageType === 'custom' && blockCustomImg) {
                         this.state.assets.images[globalIdx] = blockCustomImg;
-                        addSystemLog(`Blok ${b + 1}: Sabit gÃƒÂ¶rsel 1. sahneye atandÃ„Â±. Kalan ${blockSlideCount - 1} sahne AI ÃƒÂ¼retilecek.`, 'info');
+                        addSystemLog(`Blok ${b + 1}: Sabit görsel 1. sahneye atandı. Kalan ${blockSlideCount - 1} sahne AI üretilecek.`, 'info');
                     }
                     globalIdx += blockSlideCount;
                 }
 
                 const CHUNK_SIZE = 3;
-                addSystemLog(`ASSETS fase: ${this.state.script.videoSlides.length} sahne, ${CHUNK_SIZE}'lÃƒÂ¼ chunk.`, 'info');
+                addSystemLog(`ASSETS fase: ${this.state.script.videoSlides.length} sahne, ${CHUNK_SIZE}'lü chunk.`, 'info');
                 for (let i = 0; i < this.state.script.videoSlides.length; i += CHUNK_SIZE) {
                     const chunk = this.state.script.videoSlides.slice(i, i + CHUNK_SIZE);
-                    addSystemLog(`Sahneler ${i + 1}-${Math.min(i + CHUNK_SIZE, this.state.script.videoSlides.length)} iÃ…Å¸leniyor...`, 'info');
+                    addSystemLog(`Sahneler ${i + 1}-${Math.min(i + CHUNK_SIZE, this.state.script.videoSlides.length)} işleniyor...`, 'info');
                     const chunkPromises = chunk.map(async (slide, idx) => {
                         const actualIndex = i + idx;
                         const computedPrompt = slide.imagePrompts?.[0] || slide.topText || slide.spokenText || "News event";
@@ -3118,7 +3235,7 @@ class WorkflowCoordinator {
                 const extraAudioPromises = [];
                 // Clickbait seslendirme
                 if (!this.state.assets.thumbnailAudio) {
-                    // Clickbait seslendirme: tarih + kaynak adÃ„Â± + baÃ…Å¸lÃ„Â±k
+                    // Clickbait seslendirme: tarih + kaynak adı + başlık
                     const now = new Date();
                     const dateLocale = ({ tr:'tr-TR', en:'en-US', fr:'fr-FR', de:'de-DE', es:'es-ES', ar:'ar-SA', ru:'ru-RU' })[this.state.config?.language || 'tr'] || 'tr-TR';
                     const dateStr = now.toLocaleDateString(dateLocale, { day: 'numeric', month: 'long', year: 'numeric' });
@@ -3126,27 +3243,27 @@ class WorkflowCoordinator {
                     const sourceName = this.state.config?.sourceName || '';
                     const headline = this.state.script.thumbnailText || '';
                     const clickbaitText = [dateStr + " " + dayStr, sourceName, headline].filter(Boolean).join('. ') + '.';
-                    extraAudioPromises.push(MediaSynthesisService.generateAudio(clickbaitText, this.state.preferences.narratorVoice).then(res => { this.state.assets.thumbnailAudio = res; addSystemLog('Clickbait seslendirme hazÃ„Â±r: ' + clickbaitText.substring(0, 60) + '...', 'success'); }));
+                    extraAudioPromises.push(MediaSynthesisService.generateAudio(clickbaitText, this.state.preferences.narratorVoice).then(res => { this.state.assets.thumbnailAudio = res; addSystemLog('Clickbait seslendirme hazır: ' + clickbaitText.substring(0, 60) + '...', 'success'); }));
                 }
                 if (!this.state.script._isGuzelSoz) {
                     if (this.state.script.sonSoz && !this.state.assets.sonSozAudio) extraAudioPromises.push(MediaSynthesisService.generateAudio(this.state.script.sonSoz, this.state.preferences.narratorVoice).then(res => { this.state.assets.sonSozAudio = res; }));
                     if (this.state.config.yorum && this.state.config.yorum.trim() && !this.state.assets.yorumAudio) extraAudioPromises.push(MediaSynthesisService.generateAudio(this.state.config.yorum, this.state.preferences.narratorVoice).then(res => { this.state.assets.yorumAudio = res; }));
                     if (!this.state.assets.outroAudio) {
                         const quotePrefix = this.state.script.lastQuote ? `${this.state.script.lastQuote} ` : "";
-                        let defaultOutroText = "Abone olmayÃ„Â±, beÃ„Å¸enmeyi ve paylaÃ…Å¸mayÃ„Â± ihmal etmeyin.";
+                        let defaultOutroText = "Abone olmayı, beğenmeyi ve paylaşmayı ihmal etmeyin.";
                         if (this.state.config.language === 'en') defaultOutroText = "Don't forget to subscribe, like, and share.";
                         else if (this.state.config.language === 'fr') defaultOutroText = "N'oubliez pas de vous abonner, d'aimer et de partager.";
                         else if (this.state.config.language === 'de') defaultOutroText = "Vergessen Sie nicht zu abonnieren, zu liken und zu teilen.";
                         else if (this.state.config.language === 'es') defaultOutroText = "No olvides suscribirte, dar me gusta y compartir.";
-                        else if (this.state.config.language === 'ar') defaultOutroText = "Ã™â€Ã˜Â§ Ã˜ÂªÃ™â€ Ã˜Â³ Ã˜Â§Ã™â€Ã˜Â§Ã˜Â´Ã˜ÂªÃ˜Â±Ã˜Â§Ã™Æ’ Ã™Ë†Ã˜Â§Ã™â€Ã˜Â¥Ã˜Â¹Ã˜Â¬Ã˜Â§Ã˜Â¨ Ã™Ë†Ã˜Â§Ã™â€Ã™â€¦Ã˜Â´Ã˜Â§Ã˜Â±Ã™Æ’Ã˜Â©.";
-                        else if (this.state.config.language === 'ru') defaultOutroText = "ÄÂÄÂµ ÄÂ·ÄÂ°ÄÂ±Ã‘Æ’ÄÂ´Ã‘Å’Ã‘â€šÄÂµ ÄÂ¿ÄÂ¾ÄÂ´ÄÂ¿ÄÂ¸Ã‘ÂÄÂ°Ã‘â€šÃ‘Å’Ã‘ÂÃ‘Â, ÄÂ¿ÄÂ¾Ã‘ÂÃ‘â€šÄÂ°ÄÂ²ÄÂ¸Ã‘â€šÃ‘Å’ ÄÂ»ÄÂ°ÄÂ¹ÄÂº.";
+                        else if (this.state.config.language === 'ar') defaultOutroText = "لا تنس الاشتراك والإعجاب والمشاركة.";
+                        else if (this.state.config.language === 'ru') defaultOutroText = "Не забудьте подписаться, поставить лайк.";
                         extraAudioPromises.push(MediaSynthesisService.generateAudio(`${quotePrefix}${defaultOutroText}`, this.state.preferences.narratorVoice).then(res => { this.state.assets.outroAudio = res; }));
                     }
                 }
                 await Promise.all(extraAudioPromises);
                 const imgCount = this.state.assets.images.filter(Boolean).length;
                 const audCount = this.state.assets.audio.filter(Boolean).length;
-                addSystemLog(`ASSETS tamamlandÃ„Â±: ${imgCount}/${this.state.script.videoSlides.length} gÃƒÂ¶rsel, ${audCount}/${this.state.script.videoSlides.length} ses.`, imgCount === this.state.script.videoSlides.length ? 'success' : 'warn');
+                addSystemLog(`ASSETS tamamlandı: ${imgCount}/${this.state.script.videoSlides.length} görsel, ${audCount}/${this.state.script.videoSlides.length} ses.`, imgCount === this.state.script.videoSlides.length ? 'success' : 'warn');
                 this.state.status = 'READY_TO_RENDER';
                 await AssetManagerService.saveJobState(this.state);
             }
@@ -3156,7 +3273,7 @@ class WorkflowCoordinator {
                 this.state.status = 'COMPLETED'; this.state.videoUrl = typeof renderResult === 'string' ? renderResult : renderResult.url;
                 await AssetManagerService.saveJobState(this.state); await AssetManagerService.clearJob(this.jobId);
                 sysEventBus.emit('WORKFLOW_STATE', { status: 'COMPLETED', job: this.state });
-                try { exportWorkflowLog(this.state); } catch (e) { console.warn('Log export hatasÃ„Â±:', e); }
+                try { exportWorkflowLog(this.state); } catch (e) { console.warn('Log export hatası:', e); }
                 return this.state.videoUrl;
             }
         } catch (e) { this.state.status = 'FAILED'; this.state.error = e.message; await AssetManagerService.saveJobState(this.state); sysEventBus.emit('WORKFLOW_STATE', { status: 'FAILED', job: this.state }); throw e; }
@@ -3201,7 +3318,7 @@ const CustomSelect = ({ value, onChange, options, icon: Icon, className }) => {
 };
 
 // ============================================================================
-// MAIN APP Ã¢â‚¬â€ VOLUME MIXER & REFERENCE IMAGE SECTIONS REMOVED
+// MAIN APP — VOLUME MIXER & REFERENCE IMAGE SECTIONS REMOVED
 // ============================================================================
 export default function App() {
     const [user, setUser] = useState(null);
@@ -3213,11 +3330,11 @@ export default function App() {
     const [activeTab, setActiveTab] = useState(() => { const saved = SafeStorage.getItem('ns_activeTab'); return saved === 'image' ? 'media' : (saved || 'media'); });
     const [textInput, setTextInput] = useState(() => SafeStorage.getItem('ns_textInput') || '');
 
-    // === GAZETE TAKÃ„Â°P STATE ===
-    const [gazeteItems, setGazeteItems] = useState([]);           // gazete manÃ…Å¸et listesi
-    const [gazeteLoading, setGazeteLoading] = useState(false);    // yÃƒÂ¼kleme durumu
-    const [gazeteError, setGazeteError] = useState('');            // hata mesajÃ„Â±
-    const [gazeteCropModal, setGazeteCropModal] = useState(null); // {src, name} Ã¢â‚¬â€ crop aÃƒÂ§Ã„Â±k mÃ„Â±
+    // === GAZETE TAKİP STATE ===
+    const [gazeteItems, setGazeteItems] = useState([]);           // gazete manşet listesi
+    const [gazeteLoading, setGazeteLoading] = useState(false);    // yükleme durumu
+    const [gazeteError, setGazeteError] = useState('');            // hata mesajı
+    const [gazeteCropModal, setGazeteCropModal] = useState(null); // {src, name} — crop açık mı
     const [gazeteSource, setGazeteSource] = useState('gazeteoku'); // kaynak site
     const gazeteCanvasRef = useRef(null);                          // crop canvas ref
 
@@ -3249,27 +3366,18 @@ export default function App() {
 
     const [uiState, setUiState] = useState({ isProcessing: false, statusText: '', percent: 0, error: '', videoUrl: null, showDevMenu: false, selectedMediaFiles: [] });
 
-    // NVIDIA + Gemini API key'leri + model (sessionStorage'da tutulur, kodda hardcoded deÃ„Å¸il)
+    // NVIDIA + Gemini API key'leri + model (sessionStorage'da tutulur, kodda hardcoded değil)
     const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey());
     const [geminiKeyInput, setGeminiKeyInput] = useState(() => getGeminiKey());
-    const [providerInputs, setProviderInputs] = useState(() => {
-        const o = {};
-        for (const p of AI_PROVIDERS) o[p.id] = getProviderKey(p.id);
-        return o;
-    });
     const [nvidiaModel, setNvidiaModel] = useState(() => NV_MODEL);
     const [showApiKeyPanel, setShowApiKeyPanel] = useState(() => !getApiKey() && !getGeminiKey());
     const saveApiKey = () => {
         setApiKey(apiKeyInput.trim());
         setGeminiKey(geminiKeyInput.trim());
-        for (const p of AI_PROVIDERS) setProviderKey(p.id, (providerInputs[p.id] || '').trim());
         const m = nvidiaModel.trim() || NV_MODEL;
         setNvidiaModel(m);
-        addSystemLog('API anahtarlarÃ„Â± kaydedildi (NVIDIA + Gemini + ' + AI_PROVIDERS.length + ' saÃ„Å¸layÃ„Â±cÃ„Â±).', 'success');
+        addSystemLog('API anahtarları kaydedildi (NVIDIA + Gemini).', 'success');
         setShowApiKeyPanel(false);
-    };
-    const fillProvidedKeys = () => {
-        addSystemLog('AnahtarlarÃ„Â± tarayÃ„Â±cÃ„Â± konsolundan veya elle girin. HazÃ„Â±r anahtarlar gÃƒÂ¼venlik nedeniyle koda gÃƒÂ¶mÃƒÂ¼lmez.', 'info');
     };
 
     const [studioMedia, setStudioMedia] = useState({ outroUrl: null, musicLoaded: false, musicName: '', musicId: '', musicList: [], customSceneImages: [], isLoading: true, statusMsg: 'Bulut Kontrol Ediliyor...', syncedFolderName: '' });
@@ -3277,27 +3385,30 @@ export default function App() {
 
     const canvasRef = useRef(null);
     const workflowRef = useRef(new WorkflowCoordinator());
-    const _previewAudioRef = useRef(null); // MÃƒÂ¼zik ÃƒÂ¶nizleme iÃƒÂ§in audio ref
+    const _previewAudioRef = useRef(null); // Müzik önizleme için audio ref
 
     const getTargetSeconds = (dur) => { if (dur === 'unlimited') return 0; if (dur === '15') return 30; if (dur === '30') return 60; if (dur === '60') return 90; if (dur === '90') return 120; return 60; };
     const targetSecUI = getTargetSeconds(config.duration);
-    const maxWordsUI = config.duration === 'unlimited' ? 'SÃ„Â±nÃ„Â±rsÃ„Â±z' : Math.floor((targetSecUI - 1.5) * getWPS(config.language));
+    const maxWordsUI = config.duration === 'unlimited' ? 'Sınırsız' : Math.floor((targetSecUI - 1.5) * getWPS(config.language));
 
     const ambientOptions = [
-        { value: 'none', label: 'ÄŸÅ¸â€â€¡ Arka Ses Yok', color: 'text-slate-300' },
+        { value: 'none', label: '🔇 Arka Ses Yok', color: 'text-slate-300' },
         { label: 'Atmosfer', options: [
-            { value: 'rain', label: 'ÄŸÅ¸Å’Â§Ã¯Â¸Â YaÃ„Å¸mur', color: 'text-blue-300' },
-            { value: 'wind', label: 'ÄŸÅ¸Å’Â¬Ã¯Â¸Â RÃƒÂ¼zgar', color: 'text-slate-300' },
-            { value: 'waves', label: 'ÄŸÅ¸Å’Å  Dalgalar', color: 'text-cyan-300' },
-            { value: 'fire', label: 'ÄŸÅ¸â€Â¥ Ã…ÂÃƒÂ¶mine', color: 'text-orange-300' },
+            { value: 'rain', label: '🌧️ Yağmur', color: 'text-blue-300' },
+            { value: 'wind', label: '🌬️ Rüzgar', color: 'text-slate-300' },
+            { value: 'waves', label: '🌊 Dalgalar', color: 'text-cyan-300' },
+            { value: 'fire', label: '🔥 Şömine', color: 'text-orange-300' },
         ]}
     ];
-    // Yerel mÃƒÂ¼zikler (public/Muzik/)
-    const filteredMusicList = LOCAL_MUSIC_LIBRARY.filter(m => !musicSearchQuery || m.title.toLowerCase().includes(musicSearchQuery.toLowerCase()));
-    if (filteredMusicList.length > 0) ambientOptions.push({ label: `ÄŸÅ¸ÂÂµ Yerel MÃƒÂ¼zik (${filteredMusicList.length})`, options: filteredMusicList.map(m => ({ value: m.id, label: `ÄŸÅ¸ÂÂ¶ ${m.title}`, color: 'text-violet-400' })) });
+    // Yerel müzikler (IndexedDB'den)
+    const filteredMusicList = studioMedia.musicList.filter(m => !musicSearchQuery || m.name.toLowerCase().includes(musicSearchQuery.toLowerCase()));
+    if (filteredMusicList.length > 0) ambientOptions.push({ label: 'Müziklerim', options: filteredMusicList.map(m => ({ value: m.id, label: `🎵 ${m.name.replace(/\.[^.]+$/, '')}`, color: 'text-violet-400' })) });
+    // Yerel Muzik/ klasörü (otomatik)
+    const filteredLocalMusic = LOCAL_MUSIC_LIBRARY.filter(m => !musicSearchQuery || m.title.toLowerCase().includes(musicSearchQuery.toLowerCase()));
+    if (filteredLocalMusic.length > 0) ambientOptions.push({ label: `🎶 Yerel Müzik (${filteredLocalMusic.length})`, options: filteredLocalMusic.map(m => ({ value: m.id, label: `🎶 ${m.title}`, color: 'text-emerald-400' })) });
 
     const voiceOptions = [
-        { value: 'none', label: 'ÄŸÅ¸â€â€¡ Ses Yok', color: 'text-rose-400 font-bold' },
+        { value: 'none', label: '🔇 Ses Yok', color: 'text-rose-400 font-bold' },
         ...filteredVoices.map(v => ({ value: v.id, label: v.label }))
     ];
     if (filteredVoices.length === 0) voiceOptions.push({ value: '', label: 'Kriter Uyumsuz', color: 'text-slate-500' });
@@ -3337,51 +3448,51 @@ export default function App() {
     };
     const openPlatformConnect = (platform) => {
         const popup = window.open(platform.loginUrl, platform.name, 'width=600,height=700,scrollbars=yes');
-        addSystemLog(`${platform.name} giriÃ…Å¸ sayfasÃ„Â± aÃƒÂ§Ã„Â±ldÃ„Â±. Oturum aÃƒÂ§Ã„Â±n, otomatik olarak baÃ„Å¸lanacaksÃ„Â±nÃ„Â±z.`, 'info');
+        addSystemLog(`${platform.name} giriş sayfası açıldı. Oturum açın, otomatik olarak bağlanacaksınız.`, 'info');
         const checker = setInterval(() => {
             try {
                 if (popup.closed) {
                     clearInterval(checker);
                     togglePlatform(platform.id);
-                    addSystemLog(`${platform.name} baÃ„Å¸lantÃ„Â±sÃ„Â± tamamlandÃ„Â±!`, 'success');
+                    addSystemLog(`${platform.name} bağlantısı tamamlandı!`, 'success');
                 }
             } catch (e) { clearInterval(checker); }
         }, 800);
     };
 
-    // SeÃƒÂ§ili platformlarda sÃ„Â±ralÃ„Â± paylaÃ…Å¸Ã„Â±m (popup blocker azaltÃ„Â±r)
+    // Seçili platformlarda sıralı paylaşım (popup blocker azaltır)
     const shareToSelectedPlatforms = async () => {
         const title = workflowRef.current?.state?.script?.thumbnailText || 'Video';
-        // HiÃƒÂ§ platform seÃƒÂ§ilmemiÃ…Å¸se hepsini paylaÃ…Å¸
+        // Hiç platform seçilmemişse hepsini paylaş
         const hasSelection = Object.values(shareTargets).some(v => v);
         const selected = hasSelection 
             ? SOCIAL_PLATFORMS.filter(p => shareTargets[p.id])
             : SOCIAL_PLATFORMS;
         
         if (selected.length === 0) { 
-            addSystemLog("PaylaÃ…Å¸Ã„Â±lacak platform bulunamadÃ„Â±!", 'warn'); 
+            addSystemLog("Paylaşılacak platform bulunamadı!", 'warn'); 
             return; 
         }
         
-        addSystemLog(`${selected.length} platformda paylaÃ…Å¸Ã„Â±m aÃƒÂ§Ã„Â±lÃ„Â±yor...`, 'info');
+        addSystemLog(`${selected.length} platformda paylaşım açılıyor...`, 'info');
         
         for (let i = 0; i < selected.length; i++) {
             const platform = selected[i];
             let url = '';
             
-            // blob URL paylaÃ…Å¸Ã„Â±lamaz, sadece baÃ…Å¸lÃ„Â±k paylaÃ…Å¸Ã„Â±lÃ„Â±r
+            // blob URL paylaşılamaz, sadece başlık paylaşılır
             if (platform.id === 'x') 
                 url = `https://x.com/intent/post?text=${encodeURIComponent(title)}`;
             else if (platform.id === 'linkedin') {
-                // LinkedIn API ile doÃ„Å¸rudan paylaÃ…Å¸Ã„Â±m
+                // LinkedIn API ile doğrudan paylaşım
                 try {
-                    addSystemLog('LinkedIn API ile paylaÃ…Å¸Ã„Â±lÃ„Â±yor...', 'info');
+                    addSystemLog('LinkedIn API ile paylaşılıyor...', 'info');
                     const result = await shareToLinkedInAPI(title);
-                    addSystemLog('LinkedIn\'de paylaÃ…Å¸Ã„Â±ldÃ„Â±! Ã¢Å“â€¦', 'success');
+                    addSystemLog('LinkedIn\'de paylaşıldı! ✅', 'success');
                     if (i < selected.length - 1) await new Promise(r => setTimeout(r, 500));
-                    continue; // popup aÃƒÂ§ma, API ile paylaÃ…Å¸Ã„Â±ldÃ„Â±
+                    continue; // popup açma, API ile paylaşıldı
                 } catch (e) {
-                    addSystemLog('LinkedIn API hatasÃ„Â±, compose aÃƒÂ§Ã„Â±lÃ„Â±yor: ' + e.message, 'warn');
+                    addSystemLog('LinkedIn API hatası, compose açılıyor: ' + e.message, 'warn');
                     url = `https://www.linkedin.com/feed/compose/?text=${encodeURIComponent(title)}`;
                 }
             }
@@ -3402,14 +3513,14 @@ export default function App() {
             }
         }
         
-        addSystemLog(`${selected.length} platform aÃƒÂ§Ã„Â±ldÃ„Â±. Videoyu manuel olarak yÃƒÂ¼kleyin.`, 'success');
+        addSystemLog(`${selected.length} platform açıldı. Videoyu manuel olarak yükleyin.`, 'success');
     };
 
-    // Linki clipboard'a kopyala (sadece baÃ…Å¸lÃ„Â±k, blob URL paylaÃ…Å¸Ã„Â±lamaz)
-    // Otomatik video kaydetme (direk indirme, dosya adÃ„Â± = haber baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â±)
+    // Linki clipboard'a kopyala (sadece başlık, blob URL paylaşılamaz)
+    // Otomatik video kaydetme (direk indirme, dosya adı = haber başlığı)
     const autoSaveVideo = async (videoUrl, title, videoFormat) => {
         if (!videoUrl || !videoUrl.startsWith('blob:')) {
-            addSystemLog('GeÃƒÂ§ersiz video URL, kaydetme atlandÃ„Â±.', 'warn');
+            addSystemLog('Geçersiz video URL, kaydetme atlandı.', 'warn');
             return;
         }
 
@@ -3418,7 +3529,7 @@ export default function App() {
         try {
             const response = await fetch(videoUrl);
             const blob = await response.blob();
-            // UzantÃ„Â±: config'deki videoFormat tercih et, yoksa blob type'dan algÃ„Â±la
+            // Uzantı: config'deki videoFormat tercih et, yoksa blob type'dan algıla
             const ext = videoFormat === 'mp4' ? '.mp4' : (blob.type.includes('mp4') ? '.mp4' : '.webm');
             const safeName = title.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, "").trim().replace(/\s+/g, "_").toLowerCase();
             const fileName = `${safeName}${ext}`;
@@ -3432,7 +3543,7 @@ export default function App() {
             URL.revokeObjectURL(a.href);
             addSystemLog(`Video indirildi: ${fileName}`, 'success');
         } catch (e) {
-            addSystemLog('Video indirme hatasÃ„Â±: ' + e.message, 'error');
+            addSystemLog('Video indirme hatası: ' + e.message, 'error');
         }
     };
 
@@ -3440,7 +3551,7 @@ export default function App() {
         const title = workflowRef.current?.state?.script?.thumbnailText || 'Video';
         try {
             await navigator.clipboard.writeText(title);
-            addSystemLog('BaÃ…Å¸lÃ„Â±k panoya kopyalandÃ„Â±!', 'success');
+            addSystemLog('Başlık panoya kopyalandı!', 'success');
         } catch (e) {
             const textarea = document.createElement('textarea');
             textarea.value = title;
@@ -3448,18 +3559,18 @@ export default function App() {
             textarea.select();
             document.execCommand('copy');
             document.body.removeChild(textarea);
-            addSystemLog('BaÃ…Å¸lÃ„Â±k panoya kopyalandÃ„Â±!', 'success');
+            addSystemLog('Başlık panoya kopyalandı!', 'success');
         }
     };
 
-    // Native share (mobilde cihaz paylaÃ…Å¸Ã„Â±mÃ„Â± - sadece baÃ…Å¸lÃ„Â±k)
+    // Native share (mobilde cihaz paylaşımı - sadece başlık)
     const nativeShare = async () => {
         const title = workflowRef.current?.state?.script?.thumbnailText || 'Video';
         try {
             await navigator.share({ title: title, text: title });
-            addSystemLog('PaylaÃ…Å¸Ã„Â±m tamamlandÃ„Â±!', 'success');
+            addSystemLog('Paylaşım tamamlandı!', 'success');
         } catch (e) {
-            if (e.name !== 'AbortError') addSystemLog('PaylaÃ…Å¸Ã„Â±m hatasÃ„Â±: ' + e.message, 'error');
+            if (e.name !== 'AbortError') addSystemLog('Paylaşım hatası: ' + e.message, 'error');
         }
     };
 
@@ -3467,14 +3578,14 @@ export default function App() {
         let url = '';
         if (platform.id === 'x') { url = `https://x.com/intent/post?text=${encodeURIComponent(title + ' ' + videoUrl)}`; }
         else if (platform.id === 'linkedin') {
-            // LinkedIn API ile doÃ„Å¸rudan paylaÃ…Å¸Ã„Â±m
+            // LinkedIn API ile doğrudan paylaşım
             try {
-                addSystemLog('LinkedIn API ile paylaÃ…Å¸Ã„Â±lÃ„Â±yor...', 'info');
+                addSystemLog('LinkedIn API ile paylaşılıyor...', 'info');
                 await shareToLinkedInAPI(title);
-                addSystemLog('LinkedIn\'de paylaÃ…Å¸Ã„Â±ldÃ„Â±! Ã¢Å“â€¦', 'success');
-                return; // popup aÃƒÂ§ma
+                addSystemLog('LinkedIn\'de paylaşıldı! ✅', 'success');
+                return; // popup açma
             } catch (e) {
-                addSystemLog('LinkedIn API hatasÃ„Â±, compose aÃƒÂ§Ã„Â±lÃ„Â±yor: ' + e.message, 'warn');
+                addSystemLog('LinkedIn API hatası, compose açılıyor: ' + e.message, 'warn');
                 url = `https://www.linkedin.com/feed/compose/?text=${encodeURIComponent(title)}`;
             }
         }
@@ -3502,10 +3613,10 @@ export default function App() {
         sysEventBus.on('WORKFLOW_STATE', (data) => {
             if (data.status === 'FAILED') setUiState(prev => ({ ...prev, isProcessing: false, error: data.job.error }));
             if (data.status === 'COMPLETED') {
-                setUiState(prev => ({ ...prev, isProcessing: false, percent: 100, statusText: 'TamamlandÃ„Â±!', videoUrl: data.job.videoUrl }));
+                setUiState(prev => ({ ...prev, isProcessing: false, percent: 100, statusText: 'Tamamlandı!', videoUrl: data.job.videoUrl }));
                 // Otomatik video + log indir (H1.141)
                 autoSaveVideo(data.job.videoUrl, data.job.script?.thumbnailText || 'video', data.job.config?.videoFormat);
-                try { exportWorkflowLog(data.job); } catch (e) { console.warn('Log export hatasÃ„Â±:', e); }
+                try { exportWorkflowLog(data.job); } catch (e) { console.warn('Log export hatası:', e); }
             }
         });
         sysEventBus.on('AUTH_EXPIRED', () => setAuthExpired(true));
@@ -3516,28 +3627,24 @@ export default function App() {
     useEffect(() => {
         const loadLocalMusic = async () => {
             try {
-                // Sunucu otomatik algÃ„Â±lama
+                // Sunucu otomatik algılama
                 const detectedUrl = await getMusicProxyUrl();
                 if (detectedUrl) addSystemLog(`Sunucu bulundu: ${detectedUrl}`, 'success');
-                else addSystemLog('MÃƒÂ¼zik proxy sunucusu bulunamadÃ„Â± Ã¢â‚¬â€ CORS proxy kullanÃ„Â±lacak', 'warn');
-
-                // Yerel mÃƒÂ¼zik kÃƒÂ¼tÃƒÂ¼phanesi (public/Muzik/) otomatik yÃƒÂ¼klenir
-                const gdCount = LOCAL_MUSIC_LIBRARY.length;
-                addSystemLog(`Yerel mÃƒÂ¼zik: ${gdCount} parÃƒÂ§a bulundu (public/Muzik/).`, 'info');
+                else addSystemLog('Müzik proxy sunucusu bulunamadı — CORS proxy kullanılacak', 'warn');
 
                 const allMusic = await AssetManagerService.getAllMusicFromLib();
                 setStudioMedia(s => ({ ...s, musicList: [...allMusic], isLoading: false, statusMsg: 'Yerel Mod' }));
                 if (allMusic.length > 0) {
-                    addSystemLog(`${allMusic.length} mÃƒÂ¼zik IndexedDB'den yÃƒÂ¼klendi.`, 'success');
+                    addSystemLog(`${allMusic.length} müzik IndexedDB'den yüklendi.`, 'success');
                 } else {
-                    addSystemLog("MÃƒÂ¼zik kÃƒÂ¼tÃƒÂ¼phanesi boÃ…Å¸. KlasÃƒÂ¶r seÃƒÂ§erek mÃƒÂ¼zik ekleyin.", 'info');
+                    addSystemLog("Müzik kütüphanesi boş. Klasör seçerek müzik ekleyin.", 'info');
                 }
-                // VarsayÃ„Â±lan mÃƒÂ¼zik seÃƒÂ§imi: mÃƒÂ¼zik varsa ve hiÃƒÂ§biri seÃƒÂ§ili deÃ„Å¸ilse ilk mÃƒÂ¼ziÃ„Å¸i seÃƒÂ§
+                // Varsayılan müzik seçimi: müzik varsa ve hiçbiri seçili değilse ilk müziği seç
                 const savedPrefs = JSON.parse(SafeStorage.getItem('ns_prefs')) || {};
                 if (allMusic.length > 0 && (!savedPrefs.ambientSound || savedPrefs.ambientSound === 'none')) {
                     const firstTrack = allMusic[0];
                     setPrefs(p => ({ ...p, ambientSound: firstTrack.id, customBgMusicName: firstTrack.name, customBgMusicId: firstTrack.id }));
-                    addSystemLog(`Otomatik seÃƒÂ§im: ${firstTrack.name}`, 'info');
+                    addSystemLog(`Otomatik seçim: ${firstTrack.name}`, 'info');
                 }
                 if (savedPrefs.ambientSound && !['none', 'rain', 'wind', 'waves', 'fire'].includes(savedPrefs.ambientSound)) {
                     const track = allMusic.find(m => m.id === savedPrefs.ambientSound);
@@ -3557,17 +3664,17 @@ export default function App() {
                     try {
                         const permission = await savedDir.handle.requestPermission({ mode: 'read' });
                         if (permission === 'granted') {
-                            addSystemLog(`Otomatik mÃƒÂ¼zik senkronizasyonu: ${savedDir.name}`, 'info');
+                            addSystemLog(`Otomatik müzik senkronizasyonu: ${savedDir.name}`, 'info');
                             const currentMusic = await AssetManagerService.getAllMusicFromLib();
                             const newCount = await syncMusicFromDir(savedDir.handle, currentMusic);
                             if (newCount > 0) {
                                 const updated = await AssetManagerService.getAllMusicFromLib();
                                 setStudioMedia(s => ({ ...s, musicList: updated }));
-                                addSystemLog(`${newCount} yeni mÃƒÂ¼zik otomatik eklendi. Toplam: ${updated.length}`, 'success');
+                                addSystemLog(`${newCount} yeni müzik otomatik eklendi. Toplam: ${updated.length}`, 'success');
                             }
                         }
                     } catch (e) {
-                        console.warn("Otomatik senkronizasyon hatasÃ„Â±:", e);
+                        console.warn("Otomatik senkronizasyon hatası:", e);
                     }
                 }
             } catch (e) { setStudioMedia(s => ({ ...s, isLoading: false, statusMsg: 'Yerel Mod' })); }
@@ -3575,7 +3682,7 @@ export default function App() {
         loadLocalMusic();
     }, []);
 
-    const saveToFirestore = async (updates) => { if (!user || !isFirebaseActive) return; try { await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'user_assets', 'main'), updates, { merge: true }); } catch (error) { if (!error.message?.includes('offline')) console.warn("Firestore kayÃ„Â±t hatasÃ„Â±"); } };
+    const saveToFirestore = async (updates) => { if (!user || !isFirebaseActive) return; try { await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'user_assets', 'main'), updates, { merge: true }); } catch (error) { if (!error.message?.includes('offline')) console.warn("Firestore kayıt hatası"); } };
     const uploadChunks = async (prefix, b64Data) => { if (!user || !isFirebaseActive) return 0; const chunkSize = 800000; const chunksCount = Math.ceil(b64Data.length / chunkSize); try { for (let i = 0; i < chunksCount; i++) { await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'asset_chunks', `${prefix}_${i}`), { data: b64Data.substring(i * chunkSize, (i + 1) * chunkSize), index: i }); } return chunksCount; } catch (e) { return 0; } };
     const downloadChunks = async (prefix, chunksCount) => { if (!user || !isFirebaseActive) return null; let b64Data = ""; try { for (let i = 0; i < chunksCount; i++) { let chunkSnap = await getDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'asset_chunks', `${prefix}_${i}`)); if (!chunkSnap.exists()) chunkSnap = await getDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'music_chunks', `${prefix}_${i}`)); if (chunkSnap.exists()) b64Data += chunkSnap.data().data; else return null; } return b64Data; } catch (e) { return null; } };
 
@@ -3612,22 +3719,22 @@ export default function App() {
                 try {
                     const permission = await savedDir.handle.requestPermission({ mode: 'read' });
                     if (permission === 'granted') {
-                        addSystemLog(`Otomatik mÃƒÂ¼zik senkronizasyonu: ${savedDir.name}`, 'info');
+                        addSystemLog(`Otomatik müzik senkronizasyonu: ${savedDir.name}`, 'info');
                         const newCount = await syncMusicFromDir(savedDir.handle, allMusics);
                         if (newCount > 0) {
                             const updated = await AssetManagerService.getAllMusicFromLib();
                             setStudioMedia(s => ({ ...s, musicList: updated }));
-                            addSystemLog(`${newCount} yeni mÃƒÂ¼zik otomatik eklendi. Toplam: ${updated.length}`, 'success');
+                            addSystemLog(`${newCount} yeni müzik otomatik eklendi. Toplam: ${updated.length}`, 'success');
                         } else {
-                            addSystemLog(`MÃƒÂ¼zikler senkronize. Toplam: ${allMusics.length}`, 'success');
+                            addSystemLog(`Müzikler senkronize. Toplam: ${allMusics.length}`, 'success');
                         }
                     } else {
-                        addSystemLog("KlasÃƒÂ¶r izni yenilenemedi, elle seÃƒÂ§im gerekiyor.", 'warn');
+                        addSystemLog("Klasör izni yenilenemedi, elle seçim gerekiyor.", 'warn');
                         await AssetManagerService.removeDirHandle();
                     }
                 } catch (e) {
-                    console.warn("Otomatik senkronizasyon hatasÃ„Â±:", e);
-                    addSystemLog("Otomatik senkronizasyon baÃ…Å¸arÃ„Â±sÃ„Â±z.", 'warn');
+                    console.warn("Otomatik senkronizasyon hatası:", e);
+                    addSystemLog("Otomatik senkronizasyon başarısız.", 'warn');
                 }
             }
         };
@@ -3637,11 +3744,11 @@ export default function App() {
             if (snap.exists()) {
                 const data = snap.data();
                 let updates = {};
-                // MÃƒÂ¼zik listesini SADECE yerelde mÃƒÂ¼zik yoksa Firebase'den yÃƒÂ¼kle (overwrite ÃƒÂ¶nleme)
+                // Müzik listesini SADECE yerelde müzik yoksa Firebase'den yükle (overwrite önleme)
                 const localMusicCount = (await AssetManagerService.getAllMusicFromLib()).length;
                 if (localMusicCount === 0 && data.bgmList && data.bgmList.length > 0) {
                     updates.musicList = data.bgmList;
-                    addSystemLog(`Firebase'den ${data.bgmList.length} mÃƒÂ¼zik senkronize edildi.`, 'info');
+                    addSystemLog(`Firebase'den ${data.bgmList.length} müzik senkronize edildi.`, 'info');
                 }
                 let localOutro = await AssetManagerService.loadMedia('CUSTOM_OUTRO');
                 if (data.outroChunksCount) { if (!localOutro) { localOutro = await downloadChunks('outro', data.outroChunksCount); if (localOutro) await AssetManagerService.saveMedia('CUSTOM_OUTRO', localOutro); } updates.outroUrl = localOutro; }
@@ -3650,7 +3757,7 @@ export default function App() {
                 else updates.outroUrl = localOutro;
                 if (data.selectedBgmId) { const trackList = updates.musicList || (await AssetManagerService.getAllMusicFromLib()); const track = trackList.find(m => m.id === data.selectedBgmId); if (track) { let localMusic = await AssetManagerService.getMusicFromLib(data.selectedBgmId); if (!localMusic && track.chunksCount) { const cloudData = await downloadChunks(track.id, track.chunksCount); if (cloudData) { localMusic = { id: track.id, name: track.name, data: cloudData }; await AssetManagerService.saveMusicToLib(localMusic); } } if (localMusic) { await AssetManagerService.saveMedia('CUSTOM_MUSIC', localMusic.data); updates.musicLoaded = true; updates.musicName = track.name; updates.musicId = track.id; } } }
                 else if (data.selectedBgmId === null) { updates.musicLoaded = false; updates.musicName = ''; updates.musicId = ''; await AssetManagerService.deleteMedia('CUSTOM_MUSIC'); }
-                updates.isLoading = false; if (!updates.statusMsg || updates.statusMsg.includes('Ã„Â°ndiriliyor')) updates.statusMsg = 'Bulutla Senkronize (Aktif)';
+                updates.isLoading = false; if (!updates.statusMsg || updates.statusMsg.includes('İndiriliyor')) updates.statusMsg = 'Bulutla Senkronize (Aktif)';
                 setStudioMedia(s => ({ ...s, ...updates }));
             } else {
                 const syncLocalToCloud = async () => { let updates = {}; const localOutro = await AssetManagerService.loadMedia('CUSTOM_OUTRO'); if (localOutro) updates.outroChunksCount = await uploadChunks('outro', localOutro); const db = await AssetManagerService.getDB(); const tx = db.transaction(LIB_STORE, 'readonly'); const req = tx.objectStore(LIB_STORE).getAll(); req.onsuccess = async () => { const allMusics = req.result || []; if (allMusics.length > 0) updates.bgmList = allMusics.map(m => ({ id: m.id, name: m.name, chunksCount: Math.ceil(m.data.length / 800000) })); const savedPrefs = JSON.parse(SafeStorage.getItem('ns_prefs')) || {}; if (savedPrefs.ambientSound && savedPrefs.ambientSound !== 'none') updates.selectedBgmId = savedPrefs.ambientSound; if (Object.keys(updates).length > 0) await setDoc(docRef, updates, { merge: true }); }; };
@@ -3660,7 +3767,7 @@ export default function App() {
         return () => unsubscribe();
     }, [user]);
 
-    const handleOutroUpload = async (e) => { const file = e.target.files?.[0]; if (!file) return; setStudioMedia(s => ({ ...s, isLoading: true, statusMsg: 'Kapak YÃƒÂ¼kleniyor...' })); const b64 = await NetworkUtils.compressImage(file); await AssetManagerService.saveMedia('CUSTOM_OUTRO', b64); const chunksCount = await uploadChunks('outro', b64); await saveToFirestore({ outroChunksCount: chunksCount, backCover: null }); setStudioMedia(s => ({ ...s, outroUrl: b64, isLoading: false, statusMsg: 'Bulutla Senkronize' })); };
+    const handleOutroUpload = async (e) => { const file = e.target.files?.[0]; if (!file) return; setStudioMedia(s => ({ ...s, isLoading: true, statusMsg: 'Kapak Yükleniyor...' })); const b64 = await NetworkUtils.compressImage(file); await AssetManagerService.saveMedia('CUSTOM_OUTRO', b64); const chunksCount = await uploadChunks('outro', b64); await saveToFirestore({ outroChunksCount: chunksCount, backCover: null }); setStudioMedia(s => ({ ...s, outroUrl: b64, isLoading: false, statusMsg: 'Bulutla Senkronize' })); };
     const handleOutroDelete = async () => { await AssetManagerService.deleteMedia('CUSTOM_OUTRO'); setStudioMedia(s => ({ ...s, outroUrl: null })); await saveToFirestore({ outroChunksCount: null, backCover: null }); };
     const handleCustomSceneImagesUpload = async (e) => { const files = Array.from(e.target.files); if (!files.length) return; const availableSlots = 999 - (studioMedia.customSceneImages?.length || 0); const filesToProcess = files.slice(0, availableSlots); const newB64s = []; for (let file of filesToProcess) { if (file.type.startsWith('image/')) { const b64 = await NetworkUtils.compressImage(file); newB64s.push(b64); } } const updatedImages = [...(studioMedia.customSceneImages || []), ...newB64s].slice(0, 5); for (let i = 0; i < updatedImages.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updatedImages[i]); setStudioMedia(s => ({ ...s, customSceneImages: updatedImages })); const newMediaFiles = newB64s.map((b64, i) => ({ name: `SabitGorsel_${Date.now()}_${i}.jpg`, type: 'image/jpeg', data: b64 })); if (newMediaFiles.length > 0) setUiState(prev => ({ ...prev, selectedMediaFiles: [...prev.selectedMediaFiles, ...newMediaFiles] })); e.target.value = null; };
     const handleCustomSceneImageDelete = async (idx) => { const updated = studioMedia.customSceneImages.filter((_, i) => i !== idx); for (let i = 0; i < 999; i++) await AssetManagerService.deleteMedia("CUSTOM_SCENE_IMG_" + i); for (let i = 0; i < updated.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updated[i]); setStudioMedia(s => ({ ...s, customSceneImages: updated })); };
@@ -3673,8 +3780,8 @@ export default function App() {
         if (!files.length) return;
         const audioExts = ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma'];
         const audioFiles = files.filter(f => audioExts.some(ext => f.name.toLowerCase().endsWith(ext)));
-        if (!audioFiles.length) { addSystemLog("SeÃƒÂ§ilen dosyalarda ses dosyasÃ„Â± bulunamadÃ„Â±.", "warn"); return; }
-        addSystemLog(`${audioFiles.length} mÃƒÂ¼zik dosyasÃ„Â± bulundu, IndexedDB'ye kaydediliyor...`, 'info');
+        if (!audioFiles.length) { addSystemLog("Seçilen dosyalarda ses dosyası bulunamadı.", "warn"); return; }
+        addSystemLog(`${audioFiles.length} müzik dosyası bulundu, IndexedDB'ye kaydediliyor...`, 'info');
         let savedCount = 0;
         for (const file of audioFiles) {
             const id = "fm_" + file.name.replace(/[^a-zA-Z0-9]/g, '_') + "_" + file.size;
@@ -3686,15 +3793,15 @@ export default function App() {
         }
         const allMusic = await AssetManagerService.getAllMusicFromLib();
         setStudioMedia(s => ({ ...s, musicList: [...allMusic] }));
-        addSystemLog(`${savedCount} yeni mÃƒÂ¼zik kaydedildi. Toplam: ${allMusic.length} mÃƒÂ¼zik`, 'success');
+        addSystemLog(`${savedCount} yeni müzik kaydedildi. Toplam: ${allMusic.length} müzik`, 'success');
         e.target.value = null;
     };
     const clearSyncedFolder = async () => {
         await AssetManagerService.removeDirHandle();
         setStudioMedia(s => ({ ...s, syncedFolderName: '' }));
-        addSystemLog("Otomatik senkronizasyon kaldÃ„Â±rÃ„Â±ldÃ„Â±.", 'info');
+        addSystemLog("Otomatik senkronizasyon kaldırıldı.", 'info');
     };
-    // MÃƒÂ¼zik ÃƒÂ¶nizleme - 8 saniye ÃƒÂ§alar
+    // Müzik önizleme - 8 saniye çalar
     const playMusicPreview = (url) => {
         try {
             if (_previewAudioRef.current) { _previewAudioRef.current.pause(); _previewAudioRef.current = null; }
@@ -3708,26 +3815,26 @@ export default function App() {
 
     const handleFolderMusicSelect = async (musicId) => {
         if (prefs.ambientSound === musicId) { setPrefs(p => ({ ...p, ambientSound: 'none' })); return; }
-        // Yerel mÃƒÂ¼zik (public/Muzik/) Ã¢â‚¬â€ doÃ„Å¸rudan URL ile ÃƒÂ§al
+        // Yerel müzik (public/Muzik/) — doğrudan URL ile çal
         const track = LOCAL_MUSIC_LIBRARY.find(m => m.id === musicId);
-        if (!track) { addSystemLog("MÃƒÂ¼zik bulunamadÃ„Â± (public/Muzik/)", 'error'); return; }
-        addSystemLog(`MÃƒÂ¼zik hazÃ„Â±rlanÃ„Â±yor: ${track.title}`, 'info');
+        if (!track) { addSystemLog("Müzik bulunamadı (public/Muzik/)", 'error'); return; }
+        addSystemLog(`Müzik hazırlanıyor: ${track.title}`, 'info');
         const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC');
         if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
         try {
             const resp = await fetch(track.url);
-            if (!resp.ok) throw new Error('MÃƒÂ¼zik dosyasÃ„Â± yÃƒÂ¼klenemedi: ' + track.url);
+            if (!resp.ok) throw new Error('Müzik dosyası yüklenemedi: ' + track.url);
             const audioBlob = await resp.blob();
             const url = URL.createObjectURL(audioBlob);
             await AssetManagerService.saveMedia('CUSTOM_MUSIC', url);
             setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: track.title, customBgMusicId: musicId }));
             playMusicPreview(url);
-            addSystemLog(`MÃƒÂ¼zik hazÃ„Â±r: ${track.title}`, 'success');
+            addSystemLog(`Müzik hazır: ${track.title}`, 'success');
         } catch (e) {
-            addSystemLog(`MÃƒÂ¼zik yÃƒÂ¼kleme hatasÃ„Â±: ${e.message}`, 'error');
+            addSystemLog(`Müzik yükleme hatası: ${e.message}`, 'error');
         }
     };
-    const processSelectedFiles = async (files) => { if (!files || files.length === 0) return; if (files.length > 999) { setUiState(prev => ({ ...prev, error: "SÃ„Â±nÃ„Â±r yok seÃƒÂ§ebilirsiniz." })); return; } const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024); try { setUiState(prev => ({ ...prev, isProcessing: true, statusText: "Dosyalar iÃ…Å¸leniyor..." })); const processedFiles = await Promise.all(validFiles.map(async (file) => { const base64 = await NetworkUtils.fileToBase64(file); return { name: file.name, type: file.type, data: base64 }; })); setUiState(prev => ({ ...prev, selectedMediaFiles: processedFiles, error: '', isProcessing: false, statusText: "" })); } catch (error) { setUiState(prev => ({ ...prev, error: "Dosya okuma hatasÃ„Â±.", isProcessing: false, statusText: "" })); } };
+    const processSelectedFiles = async (files) => { if (!files || files.length === 0) return; if (files.length > 999) { setUiState(prev => ({ ...prev, error: "Sınır yok seçebilirsiniz." })); return; } const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024); try { setUiState(prev => ({ ...prev, isProcessing: true, statusText: "Dosyalar işleniyor..." })); const processedFiles = await Promise.all(validFiles.map(async (file) => { const base64 = await NetworkUtils.fileToBase64(file); return { name: file.name, type: file.type, data: base64 }; })); setUiState(prev => ({ ...prev, selectedMediaFiles: processedFiles, error: '', isProcessing: false, statusText: "" })); } catch (error) { setUiState(prev => ({ ...prev, error: "Dosya okuma hatası.", isProcessing: false, statusText: "" })); } };
     const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
     const handleDragEnter = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
     const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); };
@@ -3737,21 +3844,19 @@ export default function App() {
         sysEventBus.emit('SYS_LOG_CLEAR');
         const aCtx = _getAudioCtx(); if (aCtx.state === 'suspended') aCtx.resume().catch(() => {});
         const outType = forceOutputType || config.outputType; if (forceOutputType) setConfig(prev => ({ ...prev, outputType: forceOutputType }));
-        setUiState(prev => ({ ...prev, isProcessing: true, percent: 0, statusText: 'Workflow BaÃ…Å¸latÃ„Â±lÃ„Â±yor...', error: '', videoUrl: null }));
-        addSystemLog('Ã„Â°Ã…Å¸ akÃ„Â±Ã…Å¸Ã„Â± baÃ…Å¸latÃ„Â±ldÃ„Â±.', 'info');
+        setUiState(prev => ({ ...prev, isProcessing: true, percent: 0, statusText: 'Workflow Başlatılıyor...', error: '', videoUrl: null }));
+        addSystemLog('İş akışı başlatıldı.', 'info');
         try {
             let inputData = textInput;
             let inputType = activeTab;
             const runConfig = { ...config, outputType: outType, customSceneImages: studioMedia.customSceneImages };
-            // AtatÃƒÂ¼rk iÃƒÂ§erikli gÃƒÂ¼zel sÃƒÂ¶z Ã¢â€ â€™ otomatik mÃƒÂ¼zik seÃƒÂ§imi
+            // Atatürk içerikli güzel söz → otomatik müzik seçimi
             if (config.tip === 'guzel_soz' && textInput.trim()) {
-                const ataturkKW = ['atatÃƒÂ¼rk', 'mustafa kemal', 'samsun', 'kurtuluÃ…Å¸', 'cumhuriyet', 'baÃ„Å¸Ã„Â±msÃ„Â±zlÃ„Â±k', 'milli mÃƒÂ¼cadele', 'inkÃ„Â±lap', 'devrim', 'paÃ…Å¸a', 'gazi', 'anÃ„Â±tkabir', '19 mayÃ„Â±s'];
-                const ataturkMusicId = LOCAL_MUSIC_LIBRARY.find(m => /bir daha gel samsundan|samsun|atatÃƒÂ¼rk/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id);
-                if (ataturkKW.some(kw => textInput.toLowerCase().includes(kw)) && prefs.ambientSound !== ataturkMusicId) {
-                    if (ataturkMusicId) {
-                        addSystemLog('AtatÃƒÂ¼rk iÃƒÂ§erikli sÃƒÂ¶z Ã¢â€ â€™ yerel mÃƒÂ¼zik otomatik seÃƒÂ§ildi.', 'success');
-                        await handleFolderMusicSelect(ataturkMusicId);
-                    }
+                const ataturkKW = ['atatürk', 'mustafa kemal', 'samsun', 'kurtuluş', 'cumhuriyet', 'bağımsızlık', 'milli mücadele', 'inkılap', 'devrim', 'paşa', 'gazi', 'anıtkabir', '19 mayıs'];
+                const ataturkMusicId = LOCAL_MUSIC_LIBRARY.find(m => /bir daha gel samsundan|samsun|atatürk/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id);
+                if (ataturkKW.some(kw => textInput.toLowerCase().includes(kw)) && prefs.ambientSound !== ataturkMusicId && ataturkMusicId) {
+                    addSystemLog('Atatürk içerikli söz → yerel müzik otomatik seçildi.', 'success');
+                    await handleFolderMusicSelect(ataturkMusicId);
                 }
             }
             if (config.tip === 'guzel_soz') {
@@ -3763,24 +3868,24 @@ export default function App() {
                     inputData = targetFiles;
                     inputType = 'media';
                 } else {
-                    throw new Error("GÃƒÂ¼zel sÃƒÂ¶z iÃƒÂ§in metin veya resim girin.");
+                    throw new Error("Güzel söz için metin veya resim girin.");
                 }
             } else if (activeTab === 'media' || activeTab === 'gazete') {
                 const targetFiles = files || uiState.selectedMediaFiles;
                 if (targetFiles && targetFiles.length > 0) { inputData = targetFiles; inputType = 'media'; }
-                else throw new Error("En az bir dosya seÃƒÂ§in.");
+                else throw new Error("En az bir dosya seçin.");
             } else {
-                // prompt/url sekmesindeyken medya dosyasÃ„Â± (ses/gÃƒÂ¶rsel/video) varsa onu da kullan
+                // prompt/url sekmesindeyken medya dosyası (ses/görsel/video) varsa onu da kullan
                 const targetFiles = files || uiState.selectedMediaFiles;
                 if (targetFiles && targetFiles.length > 0) {
                     const hasAudio = targetFiles.some(f => f.type?.startsWith('audio'));
                     if (hasAudio) {
-                        // Ses dosyasÃ„Â± varsa Ã¢â‚¬â€ transkribe + analiz iÃƒÂ§in medya olarak gÃƒÂ¶nder
+                        // Ses dosyası varsa — transkribe + analiz için medya olarak gönder
                         inputData = targetFiles;
                         inputType = 'media';
-                        addSystemLog('Ses dosyasÃ„Â± algÃ„Â±landÃ„Â± Ã¢â‚¬â€ transkribe edilecek ve analiz edilecek.', 'info');
+                        addSystemLog('Ses dosyası algılandı — transkribe edilecek ve analiz edilecek.', 'info');
                     } else if (textInput.trim()) {
-                        // Metin + gÃƒÂ¶rsel varsa, metni gÃƒÂ¶nder (gÃƒÂ¶rsel AI ÃƒÂ¼retimi iÃƒÂ§in kullanÃ„Â±lÃ„Â±r)
+                        // Metin + görsel varsa, metni gönder (görsel AI üretimi için kullanılır)
                         inputData = textInput;
                         inputType = 'prompt';
                     }
@@ -3790,15 +3895,15 @@ export default function App() {
         } catch (e) { addSystemLog(`Hata: ${e.message}`, 'error'); setUiState(prev => ({ ...prev, isProcessing: false, error: e.message })); }
     };
 
-    const handleExecuteResume = async () => { const aCtx = _getAudioCtx(); if (aCtx.state === 'suspended') aCtx.resume().catch(() => {}); setUiState({ isProcessing: true, percent: workflowRef.current.state.progress || 0, statusText: 'SÃƒÂ¼rdÃƒÂ¼rÃƒÂ¼lÃƒÂ¼yor...', error: '', videoUrl: null, showDevMenu: uiState.showDevMenu }); addSystemLog('Workflow sÃƒÂ¼rdÃƒÂ¼rÃƒÂ¼lÃƒÂ¼yor...', 'warn'); try { await workflowRef.current.resumeWorkflow(canvasRef); } catch (e) { addSystemLog(`Kurtarma hatasÃ„Â±: ${e.message}`, 'error'); setUiState(prev => ({ ...prev, isProcessing: false, error: e.message })); } };
+    const handleExecuteResume = async () => { const aCtx = _getAudioCtx(); if (aCtx.state === 'suspended') aCtx.resume().catch(() => {}); setUiState({ isProcessing: true, percent: workflowRef.current.state.progress || 0, statusText: 'Sürdürülüyor...', error: '', videoUrl: null, showDevMenu: uiState.showDevMenu }); addSystemLog('Workflow sürdürülüyor...', 'warn'); try { await workflowRef.current.resumeWorkflow(canvasRef); } catch (e) { addSystemLog(`Kurtarma hatası: ${e.message}`, 'error'); setUiState(prev => ({ ...prev, isProcessing: false, error: e.message })); } };
 
-    const handleQuickReRender = async () => { const activeJob = workflowRef.current.state; if (!activeJob || !activeJob.script || activeJob.status !== 'COMPLETED') { setUiState(prev => ({ ...prev, error: "Ãƒâ€“nce video oluÃ…Å¸turun." })); return; } setUiState(prev => ({ ...prev, isProcessing: true, percent: 10, statusText: 'Yeniden Paketleniyor...' })); addSystemLog("HÃ„Â±zlÃ„Â± yeniden paketleme...", "info"); try { const outputUrl = await RenderWorkerService.executeRender(activeJob, canvasRef.current, prefs); setUiState(prev => ({ ...prev, isProcessing: false, percent: 100, videoUrl: outputUrl })); addSystemLog("TamamlandÃ„Â±!", "success"); } catch (err) { addSystemLog(`Hata: ${err.message}`, "error"); setUiState(prev => ({ ...prev, isProcessing: false, error: "BaÃ…Å¸arÃ„Â±sÃ„Â±z: " + err.message })); } };
+    const handleQuickReRender = async () => { const activeJob = workflowRef.current.state; if (!activeJob || !activeJob.script || activeJob.status !== 'COMPLETED') { setUiState(prev => ({ ...prev, error: "Önce video oluşturun." })); return; } setUiState(prev => ({ ...prev, isProcessing: true, percent: 10, statusText: 'Yeniden Paketleniyor...' })); addSystemLog("Hızlı yeniden paketleme...", "info"); try { const outputUrl = await RenderWorkerService.executeRender(activeJob, canvasRef.current, prefs); setUiState(prev => ({ ...prev, isProcessing: false, percent: 100, videoUrl: outputUrl })); addSystemLog("Tamamlandı!", "success"); } catch (err) { addSystemLog(`Hata: ${err.message}`, "error"); setUiState(prev => ({ ...prev, isProcessing: false, error: "Başarısız: " + err.message })); } };
 
-    const handleSilentRecovery = async () => { setUiState(prev => ({ ...prev, isProcessing: true, statusText: "Oturum yenileniyor..." })); const success = await attemptSilentReauth(); if (success) { setAuthExpired(false); setUiState(prev => ({ ...prev, isProcessing: false, statusText: "" })); addSystemLog("Oturum tazelendi.", "success"); } else setUiState(prev => ({ ...prev, isProcessing: false, error: "Yenileme baÃ…Å¸arÃ„Â±sÃ„Â±z. F5 ile yenileyin." })); };
+    const handleSilentRecovery = async () => { setUiState(prev => ({ ...prev, isProcessing: true, statusText: "Oturum yenileniyor..." })); const success = await attemptSilentReauth(); if (success) { setAuthExpired(false); setUiState(prev => ({ ...prev, isProcessing: false, statusText: "" })); addSystemLog("Oturum tazelendi.", "success"); } else setUiState(prev => ({ ...prev, isProcessing: false, error: "Yenileme başarısız. F5 ile yenileyin." })); };
 
-    // === GAZETE TAKÃ„Â°P FONKSÃ„Â°YONLARI ===
+    // === GAZETE TAKİP FONKSİYONLARI ===
 
-    // gazeteoku.com'dan manÃ…Å¸etleri ÃƒÂ§ek (CORS proxy ile)
+    // gazeteoku.com'dan manşetleri çek (CORS proxy ile)
     const fetchGazeteMansetleri = async () => {
         setGazeteLoading(true);
         setGazeteError('');
@@ -3810,7 +3915,7 @@ export default function App() {
                 (u) => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
             ];
             let html = '';
-            // 1. DoÃ„Å¸rudan fetch dene
+            // 1. Doğrudan fetch dene
             try {
                 const r = await fetch('https://www.gazeteoku.com/gazeteler');
                 if (r.ok) { const t = await r.text(); if (t.length > 5000 && !t.includes('Access Denied')) html = t; }
@@ -3825,8 +3930,8 @@ export default function App() {
                     } catch(e) {}
                 }
             }
-            if (!html) throw new Error('Gazete manÃ…Å¸etleri yÃƒÂ¼klenemedi. AÃ„Å¸ baÃ„Å¸lantÃ„Â±nÃ„Â±zÃ„Â± kontrol edin.');
-            // img etiketlerinden gazete bilgilerini ÃƒÂ§Ã„Â±kar
+            if (!html) throw new Error('Gazete manşetleri yüklenemedi. Ağ bağlantınızı kontrol edin.');
+            // img etiketlerinden gazete bilgilerini çıkar
             const regex = /<img[^>]+(?:src="([^"]+)"[^>]+alt="([^"]+)"|alt="([^"]+)"[^>]+src="([^"]+)")/gi;
             const items = [];
             const seen = new Set();
@@ -3839,23 +3944,23 @@ export default function App() {
                     items.push({ name, src: src.startsWith('http') ? src : 'https://i.gazeteoku.com' + src });
                 }
             }
-            if (items.length === 0) throw new Error('Gazete bulunamadÃ„Â±. Sayfa yapÃ„Â±sÃ„Â± deÃ„Å¸iÃ…Å¸miÃ…Å¸ olabilir.');
+            if (items.length === 0) throw new Error('Gazete bulunamadı. Sayfa yapısı değişmiş olabilir.');
             setGazeteItems(items);
-            addSystemLog(items.length + ' gazete manÃ…Å¸eti yÃƒÂ¼klendi.', 'success');
+            addSystemLog(items.length + ' gazete manşeti yüklendi.', 'success');
         } catch (e) {
             setGazeteError(e.message);
-            addSystemLog('Gazete yÃƒÂ¼kleme hatasÃ„Â±: ' + e.message, 'error');
+            addSystemLog('Gazete yükleme hatası: ' + e.message, 'error');
         } finally {
             setGazeteLoading(false);
         }
     };
 
-    // Crop modal aÃƒÂ§
+    // Crop modal aç
     const openCropModal = (src, name) => {
         setGazeteCropModal({ src, name });
     };
 
-    // Canvas'tan crop yapÃ„Â±p medya listesine aktar
+    // Canvas'tan crop yapıp medya listesine aktar
     const applyCrop = (cropDataUrl, gazeteName) => {
         const newFile = {
             name: gazeteName + '_crop.png',
@@ -3868,14 +3973,14 @@ export default function App() {
         }));
         setGazeteCropModal(null);
         setActiveTab('media');
-        addSystemLog('Crop medyaya aktarÃ„Â±ldÃ„Â±: ' + gazeteName, 'success');
+        addSystemLog('Crop medyaya aktarıldı: ' + gazeteName, 'success');
     };
 
-    // Tam gazete gÃƒÂ¶rselini doÃ„Å¸rudan medyaya aktar (crop olmadan)
+    // Tam gazete görselini doğrudan medyaya aktar (crop olmadan)
     const addFullImageToMedia = async (src, name) => {
         try {
             setGazeteLoading(true);
-            // GÃƒÂ¶rseli canvas'a yÃƒÂ¼kle ve data URL'e ÃƒÂ§evir
+            // Görseli canvas'a yükle ve data URL'e çevir
             const img = new Image();
             img.crossOrigin = 'anonymous';
             const dataUrl = await new Promise((resolve, reject) => {
@@ -3886,7 +3991,7 @@ export default function App() {
                     c.getContext('2d').drawImage(img, 0, 0);
                     resolve(c.toDataURL('image/jpeg', 0.92));
                 };
-                img.onerror = () => reject(new Error('GÃƒÂ¶rsel yÃƒÂ¼klenemedi: ' + name));
+                img.onerror = () => reject(new Error('Görsel yüklenemedi: ' + name));
                 img.src = src;
             });
             const newFile = { name: name + '.jpg', type: 'image/jpeg', data: dataUrl };
@@ -3895,15 +4000,15 @@ export default function App() {
                 selectedMediaFiles: [...(prev.selectedMediaFiles || []), newFile]
             }));
             setActiveTab('media');
-            addSystemLog('Tam sayfa medyaya aktarÃ„Â±ldÃ„Â±: ' + name, 'success');
+            addSystemLog('Tam sayfa medyaya aktarıldı: ' + name, 'success');
         } catch (e) {
-            addSystemLog('Aktarma hatasÃ„Â±: ' + e.message, 'error');
+            addSystemLog('Aktarma hatası: ' + e.message, 'error');
         } finally {
             setGazeteLoading(false);
         }
     };
 
-    // === CROP MODAL BÃ„Â°LEÃ…ÂENÃ„Â° ===
+    // === CROP MODAL BİLEŞENİ ===
     const GazeteCropModal = ({ src, name, onClose, onCrop }) => {
         const containerRef = useRef(null);
         const imgRef = useRef(null);
@@ -3912,14 +4017,14 @@ export default function App() {
         const [isDragging, setIsDragging] = useState(false);
         const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
 
-        // GÃƒÂ¶rsel yÃƒÂ¼klendiÃ„Å¸inde boyutlarÃ„Â± al
+        // Görsel yüklendiğinde boyutları al
         const handleImageLoad = (e) => {
             const img = e.target;
             setImgSize({ w: img.offsetWidth, h: img.offsetHeight });
             setImgLoaded(true);
         };
 
-        // Mouse koordinatlarÃ„Â±nÃ„Â± container-relative'a ÃƒÂ§evir
+        // Mouse koordinatlarını container-relative'a çevir
         const getRelPos = (e) => {
             const rect = containerRef.current.getBoundingClientRect();
             return {
@@ -3945,7 +4050,7 @@ export default function App() {
             setIsDragging(false);
         };
 
-        // Touch desteÃ„Å¸i
+        // Touch desteği
         const getTouchPos = (e) => {
             const touch = e.touches[0] || e.changedTouches[0];
             const rect = containerRef.current.getBoundingClientRect();
@@ -3978,16 +4083,16 @@ export default function App() {
             const natW = img.naturalWidth;
             const natH = img.naturalHeight;
 
-            // SeÃƒÂ§im koordinatlarÃ„Â±nÃ„Â± normalize et
+            // Seçim koordinatlarını normalize et
             const x1 = Math.min(selection.startX, selection.endX);
             const y1 = Math.min(selection.startY, selection.endY);
             const x2 = Math.max(selection.startX, selection.endX);
             const y2 = Math.max(selection.startY, selection.endY);
 
-            // Minimum boyut kontrolÃƒÂ¼
+            // Minimum boyut kontrolü
             if (x2 - x1 < 10 || y2 - y1 < 10) return;
 
-            // Display Ã¢â€ â€™ natural boyut dÃƒÂ¶nÃƒÂ¼Ã…Å¸ÃƒÂ¼mÃƒÂ¼
+            // Display → natural boyut dönüşümü
             const scaleX = natW / dispW;
             const scaleY = natH / dispH;
             const cropX = Math.round(x1 * scaleX);
@@ -4005,7 +4110,7 @@ export default function App() {
             onCrop(dataUrl, name);
         };
 
-        // SeÃƒÂ§im dikdÃƒÂ¶rtgeninin stilleri
+        // Seçim dikdörtgeninin stilleri
         const selStyle = selection ? {
             left: Math.min(selection.startX, selection.endX) + 'px',
             top: Math.min(selection.startY, selection.endY) + 'px',
@@ -4016,7 +4121,7 @@ export default function App() {
         return (
             <div className="fixed inset-0 bg-black/90 z-[9999] flex flex-col items-center justify-center p-4" onClick={onClose}>
                 <div className="bg-slate-900 border border-indigo-500/30 rounded-2xl p-4 max-w-4xl w-full max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-                    {/* BaÃ…Å¸lÃ„Â±k */}
+                    {/* Başlık */}
                     <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
                             <Scissors size={18} className="text-indigo-400" />
@@ -4028,37 +4133,37 @@ export default function App() {
                                     <Check size={14} /> Crop'u Kullan
                                 </button>
                             )}
-                            <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Ã¢Å“â€¢ Kapat</button>
+                            <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold">✕ Kapat</button>
                         </div>
                     </div>
                     {/* Talimat */}
-                    <p className="text-slate-400 text-[11px] mb-2">ÄŸÅ¸â€“Â±Ã¯Â¸Â Fare ile gazete ÃƒÂ¼zerinde bir alan seÃƒÂ§in, sonra "Crop'u Kullan" butonuna tÃ„Â±klayÃ„Â±n.</p>
-                    {/* GÃƒÂ¶rsel + SeÃƒÂ§im alanÃ„Â± */}
+                    <p className="text-slate-400 text-[11px] mb-2">🖱️ Fare ile gazete üzerinde bir alan seçin, sonra "Crop'u Kullan" butonuna tıklayın.</p>
+                    {/* Görsel + Seçim alanı */}
                     <div ref={containerRef} className="relative flex-1 overflow-auto rounded-xl bg-black/50 select-none"
                         onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}
                         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
                         style={{ cursor: 'crosshair', touchAction: 'none' }}>
                         <img ref={imgRef} src={src} crossOrigin="anonymous" onLoad={handleImageLoad}
                             className="w-full h-auto block" alt={name} draggable={false} />
-                        {/* SeÃƒÂ§im dikdÃƒÂ¶rtgeni */}
+                        {/* Seçim dikdörtgeni */}
                         {selection && imgLoaded && (
                             <>
-                                {/* KarartÃ„Â±lmÃ„Â±Ã…Å¸ overlay - 4 div ile maske (clipPath yerine daha uyumlu) */}
+                                {/* Karartılmış overlay - 4 div ile maske (clipPath yerine daha uyumlu) */}
                                 <div className="absolute inset-0 pointer-events-none">
-                                    {/* ÃƒÅ“st */}
+                                    {/* Üst */}
                                     <div className="absolute left-0 right-0 top-0 bg-black/50" style={{ bottom: `calc(100% - ${selStyle.top})` }} />
                                     {/* Alt */}
                                     <div className="absolute left-0 right-0 bottom-0 bg-black/50" style={{ top: `calc(${selStyle.top} + ${selStyle.height})` }} />
                                     {/* Sol */}
                                     <div className="absolute left-0 top-0 bottom-0 bg-black/50" style={{ top: selStyle.top, bottom: `calc(100% - ${selStyle.top} - ${selStyle.height})`, right: `calc(100% - ${selStyle.left})` }} />
-                                    {/* SaÃ„Å¸ */}
+                                    {/* Sağ */}
                                     <div className="absolute right-0 top-0 bottom-0 bg-black/50" style={{ top: selStyle.top, bottom: `calc(100% - ${selStyle.top} - ${selStyle.height})`, left: `calc(${selStyle.left} + ${selStyle.width})` }} />
                                 </div>
-                                {/* SeÃƒÂ§im kutusu */}
+                                {/* Seçim kutusu */}
                                 <div className="absolute border-2 border-emerald-400 bg-emerald-400/10 pointer-events-none"
                                     style={selStyle}>
                                     <div className="absolute -top-5 left-0 bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                        {Math.round(Math.abs(selection.endX - selection.startX))}Ãƒâ€”{Math.round(Math.abs(selection.endY - selection.startY))}
+                                        {Math.round(Math.abs(selection.endX - selection.startX))}×{Math.round(Math.abs(selection.endY - selection.startY))}
                                     </div>
                                 </div>
                             </>
@@ -4069,25 +4174,21 @@ export default function App() {
         );
     };
 
-    // === GAZETELER ARASI GEÃƒâ€¡Ã„Â°Ã…Â Ã„Â°Ãƒâ€¡Ã„Â°N GALERÃ„Â° MODU ===
+    // === GAZETELER ARASI GEÇİŞ İÇİN GALERİ MODU ===
     const [gazeteGalleryView, setGazeteGalleryView] = useState('grid'); // 'grid' | 'single'
     const [gazeteCurrentIdx, setGazeteCurrentIdx] = useState(0);
 
     return (
         <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans p-3 md:p-4 relative overflow-hidden">
             <div className="max-w-3xl mx-auto">
-                {/* NVIDIA + GEMINI API KEY PANELÃ„Â° */}
+                {/* NVIDIA + GEMINI API KEY PANELİ */}
                 {showApiKeyPanel && (
                     <div className="mb-4 p-4 rounded-2xl bg-slate-900 border border-amber-500/40 shadow-lg">
                         <div className="flex items-center gap-2 mb-2">
                             <ShieldCheck size={18} className="text-amber-400" />
-                            <h2 className="text-sm font-bold text-amber-300">API AnahtarlarÃ„Â± Gerekli</h2>
+                            <h2 className="text-sm font-bold text-amber-300">API Anahtarları Gerekli</h2>
                         </div>
-                        <p className="text-xs text-slate-400 mb-3">NVIDIA (metin, ÃƒÂ¶nce) ve Gemini (gÃƒÂ¶rsel + TTS + fallback metin) ayrÃ„Â± anahtarlardÃ„Â±r. AyrÃ„Â±ca {AI_PROVIDERS.length} adet ÃƒÂ¼cretsiz OpenAI-uyumlu saÃ„Å¸layÃ„Â±cÃ„Â± fallback zincirine eklenmiÃ…Å¸tir. Anahtarlar tarayÃ„Â±cÃ„Â±da (sessionStorage) saklanÃ„Â±r, koda gÃƒÂ¶mÃƒÂ¼lmez.</p>
-                        <button
-                            onClick={fillProvidedKeys}
-                            className="mb-3 w-full bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
-                        >Ã¢â€Â¹Ã¯Â¸Â AnahtarlarÃ„Â± Nereye GireceÃ„Å¸imi Bilmiyorum</button>
+                        <p className="text-xs text-slate-400 mb-3">NVIDIA (metin, önce) ve Gemini (görsel + TTS + fallback metin) ayrı anahtarlardır. Anahtarlar tarayıcıda (sessionStorage) saklanır, koda gömülmez. NVIDIA başarısız olursa otomatik Gemini'ye düşer.</p>
                         <label className="block text-xs text-slate-400 mb-1">NVIDIA API Key (nvapi-...)</label>
                         <input
                             type="password"
@@ -4104,20 +4205,6 @@ export default function App() {
                             placeholder="AIza..."
                             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white mb-3 focus:outline-none focus:border-amber-400"
                         />
-                        <div className="grid grid-cols-2 gap-2 mb-3">
-                        {AI_PROVIDERS.map(p => (
-                            <div key={p.id}>
-                                <label className="block text-[10px] text-slate-400 mb-1">{p.label}</label>
-                                <input
-                                    type="password"
-                                    value={providerInputs[p.id] || ''}
-                                    onChange={(e) => setProviderInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
-                                    placeholder={p.label + ' key'}
-                                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
-                                />
-                            </div>
-                        ))}
-                        </div>
                         <label className="block text-xs text-slate-400 mb-1">NVIDIA Model</label>
                         <input
                             type="text"
@@ -4136,14 +4223,14 @@ export default function App() {
                     <button
                         onClick={() => setShowApiKeyPanel(true)}
                         className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-400 hover:text-amber-300 transition-colors"
-                    ><ShieldCheck size={14} /> NVIDIA: {apiKeyInput ? 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ ' + apiKeyInput.slice(-4) : 'yok'} <span className="text-slate-600">|</span> Gemini: {geminiKeyInput ? 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢ ' + geminiKeyInput.slice(-4) : 'yok'} <span className="text-amber-300">(deÃ„Å¸iÃ…Å¸tir)</span></button>
+                    ><ShieldCheck size={14} /> NVIDIA: {apiKeyInput ? '•••• ' + apiKeyInput.slice(-4) : 'yok'} <span className="text-slate-600">|</span> Gemini: {geminiKeyInput ? '•••• ' + geminiKeyInput.slice(-4) : 'yok'} <span className="text-amber-300">(değiştir)</span></button>
                 )}
 
                 <div className="text-center mb-4 flex items-center justify-center gap-3">
                     <h1 className="text-xl md:text-3xl font-black tracking-tight text-white whitespace-nowrap">OTONOM</h1>
                     <div className="bg-indigo-900/40 border-2 border-indigo-500/50 px-3 py-1.5 rounded-full shadow-[0_0_20px_rgba(99,102,241,0.3)]">
                     <p className="text-indigo-300 text-[10px] md:text-xs font-black tracking-widest uppercase">
-                             Hermes H1.151 <span className="mx-1 text-white">Ã¢â‚¬Â¢</span> One-Page
+                             Hermes H1.151 <span className="mx-1 text-white">•</span> One-Page
                          </p>
                     </div>
                 </div>
@@ -4153,8 +4240,8 @@ export default function App() {
                         <div className="flex items-center gap-3 text-amber-400">
                             <AlertCircle size={20} className="shrink-0 animate-pulse" />
                             <div>
-                                <p className="text-xs font-bold uppercase tracking-wider">YarÃ„Â±m Kalan Ã„Â°Ã…Å¸lem</p>
-                                <p className="text-xs text-slate-300">Son render kurtarÃ„Â±labilir.</p>
+                                <p className="text-xs font-bold uppercase tracking-wider">Yarım Kalan İşlem</p>
+                                <p className="text-xs text-slate-300">Son render kurtarılabilir.</p>
                             </div>
                         </div>
                         <div className="flex gap-2">
@@ -4164,7 +4251,7 @@ export default function App() {
                     </div>
                 )}
 
-                {/* ARKA PLAN SESÃ„Â° */}
+                {/* ARKA PLAN SESİ */}
                 <div className="bg-indigo-950/20 border border-indigo-500/20 rounded-2xl p-3 mb-4 shadow-lg">
                     <div className="bg-black/40 p-2.5 rounded-xl border border-slate-800 flex items-center justify-between relative">
                         <div className="flex items-center gap-3 w-full">
@@ -4176,13 +4263,13 @@ export default function App() {
                         </div>
                         <div className="flex gap-2 shrink-0 relative z-10">
                             {(prefs.ambientSound && !['none', 'rain', 'wind', 'waves', 'fire'].includes(prefs.ambientSound)) && <button onClick={deleteMusic} className="bg-rose-500/20 hover:bg-rose-500/40 text-rose-500 p-2 rounded-lg transition"><Trash2 size={16} /></button>}
-                            <button onClick={handleFolderSelect} className="bg-violet-600 hover:bg-violet-500 text-white px-3 md:px-4 py-2 rounded-lg text-xs font-bold cursor-pointer transition whitespace-nowrap">MÃƒÅ“ZÃ„Â°K KLASÃƒâ€“RÃƒÅ“ SEÃƒâ€¡</button>
+                            <button onClick={handleFolderSelect} className="bg-violet-600 hover:bg-violet-500 text-white px-3 md:px-4 py-2 rounded-lg text-xs font-bold cursor-pointer transition whitespace-nowrap">MÜZİK KLASÖRÜ SEÇ</button>
                             <input ref={musicFileInputRef} type="file" webkitdirectory="true" directory="true" multiple accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.wma" className="hidden" onChange={handleFolderSelectLegacy} />
                         </div>
                     </div>
                     {studioMedia.musicList.length > 0 && (
                         <div className="mt-2">
-                            <input type="text" placeholder="MÃƒÂ¼zik ara..." value={musicSearchQuery} onChange={e => setMusicSearchQuery(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500 transition" />
+                            <input type="text" placeholder="Müzik ara..." value={musicSearchQuery} onChange={e => setMusicSearchQuery(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-violet-500 transition" />
                         </div>
                     )}
                     {studioMedia.syncedFolderName && (
@@ -4191,15 +4278,15 @@ export default function App() {
                                 <RefreshCw size={12} className="text-emerald-400 animate-spin" style={{ animationDuration: '3s' }} />
                                 <span className="text-[10px] text-emerald-400 font-bold">Otomatik: {studioMedia.syncedFolderName}</span>
                             </div>
-                            <button onClick={clearSyncedFolder} className="text-[10px] text-slate-400 hover:text-rose-400 transition">KaldÃ„Â±r</button>
+                            <button onClick={clearSyncedFolder} className="text-[10px] text-slate-400 hover:text-rose-400 transition">Kaldır</button>
                         </div>
                     )}
                     {studioMedia.musicList.length === 0 && (
-                        <p className="text-[9px] text-slate-500 mt-1.5 text-center">MÃƒÂ¼zik klasÃƒÂ¶rÃƒÂ¼ seÃƒÂ§in Ã¢â‚¬â€ tÃƒÂ¼m mÃƒÂ¼zikler otomatik yÃƒÂ¼klenir</p>
+                        <p className="text-[9px] text-slate-500 mt-1.5 text-center">Müzik klasörü seçin — tüm müzikler otomatik yüklenir</p>
                     )}
                 </div>
 
-                {/* ANA Ã„Â°Ãƒâ€¡ERÃ„Â°K */}
+                {/* ANA İÇERİK */}
                 <div className="bg-slate-900 border border-slate-800 rounded-3xl p-3 md:p-4 shadow-2xl relative z-10 mb-4">
                     <div className="flex flex-col sm:flex-row gap-2 bg-black/30 p-1.5 rounded-xl mb-4 flex-wrap">
                         <button onClick={() => setActiveTab('text')} className={`flex-1 min-w-[120px] py-2.5 rounded-lg text-xs md:text-sm font-bold transition-all ${activeTab === 'text' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>Metin / Haber</button>
@@ -4211,41 +4298,41 @@ export default function App() {
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3 font-bold">
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Clock} value={config.duration} onChange={(val) => setConfig({ ...config, duration: val })} options={[{ value: 'unlimited', label: 'Ã¢Ë†Â SÃ„Â±nÃ„Â±rsÃ„Â±z', color: 'text-emerald-400 font-bold' }, { value: '15', label: '15-30s' }, { value: '30', label: '30-60s' }, { value: '60', label: '60-90s' }, { value: '90', label: '90-120s' }]} />
+                            <CustomSelect icon={Clock} value={config.duration} onChange={(val) => setConfig({ ...config, duration: val })} options={[{ value: 'unlimited', label: '∞ Sınırsız', color: 'text-emerald-400 font-bold' }, { value: '15', label: '15-30s' }, { value: '30', label: '30-60s' }, { value: '60', label: '60-90s' }, { value: '90', label: '90-120s' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
                             <CustomSelect icon={Smartphone} value={config.aspectRatio || '9:16'} onChange={(val) => setConfig({ ...config, aspectRatio: val })} options={[{ value: '9:16', label: 'Dikey (9:16)' }, { value: '16:9', label: 'Yatay (16:9)' }, { value: '1:1', label: 'Kare (1:1)' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Clapperboard} value={config.videoStyle || 'explainer'} onChange={(val) => setConfig({ ...config, videoStyle: val })} options={[{ value: 'news_flash', label: 'Haber BÃƒÂ¼lteni' }, { value: 'cinematic', label: 'Sinematik' }, { value: 'explainer', label: 'AÃƒÂ§Ã„Â±klayÃ„Â±cÃ„Â±' }, { value: 'weekly_roundup', label: 'HaftalÃ„Â±k Ãƒâ€“zet' }, { value: 'prompt_output', label: 'Custom Prompt', color: 'text-fuchsia-400 font-bold' }]} />
+                            <CustomSelect icon={Clapperboard} value={config.videoStyle || 'explainer'} onChange={(val) => setConfig({ ...config, videoStyle: val })} options={[{ value: 'news_flash', label: 'Haber Bülteni' }, { value: 'cinematic', label: 'Sinematik' }, { value: 'explainer', label: 'Açıklayıcı' }, { value: 'weekly_roundup', label: 'Haftalık Özet' }, { value: 'prompt_output', label: 'Custom Prompt', color: 'text-fuchsia-400 font-bold' }]} />
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Palette} value={config.imageStyle || 'cinematic'} onChange={(val) => setConfig({ ...config, imageStyle: val })} options={[{ value: 'watercolor', label: 'Sulu Boya' }, { value: 'sketch', label: 'Karakalem' }, { value: 'oil_painting', label: 'YaÃ„Å¸lÃ„Â± Boya' }, { value: 'cinematic', label: 'GerÃƒÂ§ekÃƒÂ§i' }, { value: 'minimalist', label: 'Minimalist' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'retro', label: 'Retro' }, { value: '3d_render', label: '3D Render' }, { value: 'anime', label: 'Anime' }]} />
+                            <CustomSelect icon={Palette} value={config.imageStyle || 'cinematic'} onChange={(val) => setConfig({ ...config, imageStyle: val })} options={[{ value: 'watercolor', label: 'Sulu Boya' }, { value: 'sketch', label: 'Karakalem' }, { value: 'oil_painting', label: 'Yağlı Boya' }, { value: 'cinematic', label: 'Gerçekçi' }, { value: 'minimalist', label: 'Minimalist' }, { value: 'cyberpunk', label: 'Cyberpunk' }, { value: 'retro', label: 'Retro' }, { value: '3d_render', label: '3D Render' }, { value: 'anime', label: 'Anime' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center gap-3">
                             <Monitor size={16} className="text-indigo-400 shrink-0" />
                             <div className="flex gap-2 w-full">{['1K', '2K', '4K'].map(res => (<button key={res} onClick={() => setConfig({ ...config, resolution: res })} className={`flex-1 py-1 rounded-lg text-xs font-bold transition-all ${config.resolution === res ? 'bg-slate-200 text-slate-900' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-700'}`}>{res}</button>))}</div>
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Activity} value={config.transition || 'none'} onChange={(val) => setConfig({ ...config, transition: val })} options={[{ value: 'none', label: 'Yok' }, { value: 'crossfade', label: 'KarÃ„Â±Ã…Å¸Ã„Â±r' }, { value: 'fadeIn', label: 'YavaÃ…Å¸ÃƒÂ§a Belirme' }, { value: 'fadeOut', label: 'YavaÃ…Å¸ÃƒÂ§a Kaybolma' }, { value: 'slideIn', label: 'Kayarak GiriÃ…Å¸' }, { value: 'slideOut', label: 'Kayarak Ãƒâ€¡Ã„Â±kÃ„Â±Ã…Å¸' }]} />
+                            <CustomSelect icon={Activity} value={config.transition || 'none'} onChange={(val) => setConfig({ ...config, transition: val })} options={[{ value: 'none', label: 'Yok' }, { value: 'crossfade', label: 'Karışır' }, { value: 'fadeIn', label: 'Yavaşça Belirme' }, { value: 'fadeOut', label: 'Yavaşça Kaybolma' }, { value: 'slideIn', label: 'Kayarak Giriş' }, { value: 'slideOut', label: 'Kayarak Çıkış' }]} />
                         </div>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-3">
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Clapperboard} value={config.tip || 'haber'} onChange={(val) => setConfig({ ...config, tip: val })} options={[{ value: 'haber', label: 'Haber', color: 'text-emerald-400 font-bold' }, { value: 'guzel_soz', label: 'GÃƒÂ¼zel SÃƒÂ¶z', color: 'text-amber-400 font-bold' }, { value: 'iddia_analizi', label: 'Ã„Â°ddia Analizi', color: 'text-cyan-400 font-bold' }]} />
+                            <CustomSelect icon={Clapperboard} value={config.tip || 'haber'} onChange={(val) => setConfig({ ...config, tip: val })} options={[{ value: 'haber', label: 'Haber', color: 'text-emerald-400 font-bold' }, { value: 'guzel_soz', label: 'Güzel Söz', color: 'text-amber-400 font-bold' }, { value: 'iddia_analizi', label: 'İddia Analizi', color: 'text-cyan-400 font-bold' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Globe} value={config.language || 'tr'} onChange={(val) => setConfig({ ...config, language: val })} options={[{ value: 'tr', label: 'TÃƒÂ¼rkÃƒÂ§e' }, { value: 'en', label: 'English' }, { value: 'fr', label: 'FranÃƒÂ§ais' }, { value: 'de', label: 'Deutsch' }, { value: 'es', label: 'EspaÃƒÂ±ol' }, { value: 'ar', label: 'Ã˜Â§Ã™â€Ã˜Â¹Ã˜Â±Ã˜Â¨Ã™Å Ã˜Â©' }, { value: 'ru', label: 'ÄÂ Ã‘Æ’Ã‘ÂÃ‘ÂÄÂºÄÂ¸ÄÂ¹' }]} />
+                            <CustomSelect icon={Globe} value={config.language || 'tr'} onChange={(val) => setConfig({ ...config, language: val })} options={[{ value: 'tr', label: 'Türkçe' }, { value: 'en', label: 'English' }, { value: 'fr', label: 'Français' }, { value: 'de', label: 'Deutsch' }, { value: 'es', label: 'Español' }, { value: 'ar', label: 'العربية' }, { value: 'ru', label: 'Русский' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={MessageSquare} value={config.subtitles || 'on'} onChange={(val) => setConfig({ ...config, subtitles: val })} options={[{ value: 'on', label: 'AltyazÃ„Â±: AÃƒÂ§Ã„Â±k' }, { value: 'off', label: 'AltyazÃ„Â±: KapalÃ„Â±' }]} />
+                            <CustomSelect icon={MessageSquare} value={config.subtitles || 'on'} onChange={(val) => setConfig({ ...config, subtitles: val })} options={[{ value: 'on', label: 'Altyazı: Açık' }, { value: 'off', label: 'Altyazı: Kapalı' }]} />
                         </div>
                         <div className="bg-black/30 p-2.5 rounded-xl border border-slate-800 flex items-center">
-                            <CustomSelect icon={Type} value={config.analysisMode || 'yorumsuz'} onChange={(val) => setConfig({ ...config, analysisMode: val })} options={[{ value: 'yorumsuz', label: 'Yorumsuz' }, { value: 'visibility', label: 'GÃƒÂ¶rÃƒÂ¼nÃƒÂ¼rlÃƒÂ¼k' }, { value: 'deep_analysis', label: 'Derin Analiz', color: 'text-fuchsia-400 font-bold' }]} />
+                            <CustomSelect icon={Type} value={config.analysisMode || 'yorumsuz'} onChange={(val) => setConfig({ ...config, analysisMode: val })} options={[{ value: 'yorumsuz', label: 'Yorumsuz' }, { value: 'visibility', label: 'Görünürlük' }, { value: 'deep_analysis', label: 'Derin Analiz', color: 'text-fuchsia-400 font-bold' }]} />
                         </div>
                     </div>
 
@@ -4268,13 +4355,13 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* KAYNAK ADI + SABÃ„Â°T GÃƒâ€“RSEL + YORUM */}
+                    {/* KAYNAK ADI + SABİT GÖRSEL + YORUM */}
                     <div className="grid grid-cols-3 gap-3 mb-3">
                         <div className="bg-black/30 p-2 rounded-xl border border-slate-800 flex items-center justify-center">
                             {studioMedia.customSceneImages && studioMedia.customSceneImages[0] ? (
                                 <img src={studioMedia.customSceneImages[0]} className="w-full h-10 object-cover rounded-lg" alt="Sabit" />
                             ) : (
-                                <div className="text-[8px] text-slate-600 font-bold uppercase">GÃƒÂ¶rsel Yok</div>
+                                <div className="text-[8px] text-slate-600 font-bold uppercase">Görsel Yok</div>
                             )}
                         </div>
                         <div className="bg-black/30 p-1.5 rounded-xl border border-slate-800">
@@ -4285,7 +4372,7 @@ export default function App() {
                                         { value: 'X', label: 'X (Twitter)' }, { value: 'TikTok', label: 'TikTok' }, { value: 'Instagram', label: 'Instagram' }, { value: 'Facebook', label: 'Facebook' }
                                     ]},
                                     { label: 'Gazeteler', options: [
-                                        { value: 'Sabah', label: 'Sabah' }, { value: 'HÃƒÂ¼rriyet', label: 'HÃƒÂ¼rriyet' }, { value: 'SÃƒÂ¶zcÃƒÂ¼', label: 'SÃƒÂ¶zcÃƒÂ¼' }, { value: 'Milliyet', label: 'Milliyet' }, { value: 'Posta', label: 'Posta' }, { value: 'HabertÃƒÂ¼rk', label: 'HabertÃƒÂ¼rk' }, { value: 'Fanatik', label: 'Fanatik' }, { value: 'Takvim', label: 'Takvim' }, { value: 'TÃƒÂ¼rkiye Gazetesi', label: 'TÃƒÂ¼rkiye Gazetesi' }, { value: 'Yeni Ã…Âafak', label: 'Yeni Ã…Âafak' }, { value: 'Cumhuriyet', label: 'Cumhuriyet' }, { value: 'BirgÃƒÂ¼n', label: 'BirgÃƒÂ¼n' }, { value: 'AydÃ„Â±nlÃ„Â±k', label: 'AydÃ„Â±nlÃ„Â±k' }, { value: 'YeniÃƒÂ§aÃ„Å¸', label: 'YeniÃƒÂ§aÃ„Å¸' }, { value: 'Evrensel', label: 'Evrensel' }, { value: 'Karar', label: 'Karar' }, { value: 'DiriliÃ…Å¸ PostasÃ„Â±', label: 'DiriliÃ…Å¸ PostasÃ„Â±' }, { value: 'Milat', label: 'Milat' }, { value: 'Korkusuz', label: 'Korkusuz' }, { value: 'DÃƒÂ¼nya', label: 'DÃƒÂ¼nya' }, { value: 'Yeni Birlik', label: 'Yeni Birlik' }, { value: 'Milli Gazete', label: 'Milli Gazete' }, { value: 'TavÃ„Â±r', label: 'TavÃ„Â±r' }, { value: 'Nefes', label: 'Nefes' }, { value: 'AkÃ…Å¸am', label: 'AkÃ…Å¸am' }, { value: 'Gazete Pencere', label: 'Gazete Pencere' }, { value: 'NasÃ„Â±l Bir Ekonomi', label: 'NasÃ„Â±l Bir Ekonomi' }, { value: 'Yeni Mesaj', label: 'Yeni Mesaj' }, { value: 'Analiz', label: 'Analiz' }, { value: 'BugÃƒÂ¼n', label: 'BugÃƒÂ¼n' }, { value: 'Yeni Asya', label: 'Yeni Asya' }, { value: 'FotomaÃƒÂ§', label: 'FotomaÃƒÂ§' }
+                                        { value: 'Sabah', label: 'Sabah' }, { value: 'Hürriyet', label: 'Hürriyet' }, { value: 'Sözcü', label: 'Sözcü' }, { value: 'Milliyet', label: 'Milliyet' }, { value: 'Posta', label: 'Posta' }, { value: 'Habertürk', label: 'Habertürk' }, { value: 'Fanatik', label: 'Fanatik' }, { value: 'Takvim', label: 'Takvim' }, { value: 'Türkiye Gazetesi', label: 'Türkiye Gazetesi' }, { value: 'Yeni Şafak', label: 'Yeni Şafak' }, { value: 'Cumhuriyet', label: 'Cumhuriyet' }, { value: 'Birgün', label: 'Birgün' }, { value: 'Aydınlık', label: 'Aydınlık' }, { value: 'Yeniçağ', label: 'Yeniçağ' }, { value: 'Evrensel', label: 'Evrensel' }, { value: 'Karar', label: 'Karar' }, { value: 'Diriliş Postası', label: 'Diriliş Postası' }, { value: 'Milat', label: 'Milat' }, { value: 'Korkusuz', label: 'Korkusuz' }, { value: 'Dünya', label: 'Dünya' }, { value: 'Yeni Birlik', label: 'Yeni Birlik' }, { value: 'Milli Gazete', label: 'Milli Gazete' }, { value: 'Tavır', label: 'Tavır' }, { value: 'Nefes', label: 'Nefes' }, { value: 'Akşam', label: 'Akşam' }, { value: 'Gazete Pencere', label: 'Gazete Pencere' }, { value: 'Nasıl Bir Ekonomi', label: 'Nasıl Bir Ekonomi' }, { value: 'Yeni Mesaj', label: 'Yeni Mesaj' }, { value: 'Analiz', label: 'Analiz' }, { value: 'Bugün', label: 'Bugün' }, { value: 'Yeni Asya', label: 'Yeni Asya' }, { value: 'Fotomaç', label: 'Fotomaç' }
                                     ]}
                                 ]} className="flex-1" />
                             </div>
@@ -4293,20 +4380,20 @@ export default function App() {
                                 type="text"
                                 value={config.sourceName || ''}
                                 onChange={(e) => setConfig({ ...config, sourceName: e.target.value })}
-                                placeholder="Manuel kaynak adÃ„Â± yaz..."
+                                placeholder="Manuel kaynak adı yaz..."
                                 className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600 font-bold mt-1.5 px-1 py-1 border-t border-slate-700/50"
                             />
                         </div>
                         <div className="bg-black/30 p-2 rounded-xl border border-slate-800">
-                            <textarea value={config.yorum || ''} onChange={(e) => setConfig({ ...config, yorum: e.target.value })} placeholder="Yorum (2-3 satÃ„Â±r)" className="w-full bg-transparent text-[10px] text-slate-200 outline-none placeholder:text-slate-600 font-bold resize-none h-8 leading-tight" rows={2} />
+                            <textarea value={config.yorum || ''} onChange={(e) => setConfig({ ...config, yorum: e.target.value })} placeholder="Yorum (2-3 satır)" className="w-full bg-transparent text-[10px] text-slate-200 outline-none placeholder:text-slate-600 font-bold resize-none h-8 leading-tight" rows={2} />
                         </div>
                     </div>
 
-                    {/* SABÃ„Â°T GÃƒâ€“RSELLER + MEDYA Ã¢â‚¬â€ yan yana */}
+                    {/* SABİT GÖRSELLER + MEDYA — yan yana */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                        {/* SABÃ„Â°T GÃƒâ€“RSELLER */}
+                        {/* SABİT GÖRSELLER */}
                         <div className="bg-cyan-950/20 border border-cyan-500/20 rounded-xl p-2.5 shadow-lg">
-                            <h2 className="text-[10px] font-black text-cyan-400 mb-1 flex items-center gap-1.5"><Layers size={12} /> SABÃ„Â°T GÃƒâ€“RSELLER (SINIRSIZ)</h2>
+                            <h2 className="text-[10px] font-black text-cyan-400 mb-1 flex items-center gap-1.5"><Layers size={12} /> SABİT GÖRSELLER (SINIRSIZ)</h2>
                             <div className="flex flex-wrap gap-2">
                                 {studioMedia.customSceneImages && studioMedia.customSceneImages.map((img, idx) => (
                                     <div key={idx} className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-700 shadow-md group">
@@ -4324,9 +4411,9 @@ export default function App() {
                             </div>
                         </div>
 
-                        {/* MEDYA YÃƒÅ“KLE */}
+                        {/* MEDYA YÜKLE */}
                         <div className="bg-black/30 border border-slate-800 rounded-xl p-2.5 shadow-lg">
-                            <h2 className="text-[10px] font-black text-indigo-400 mb-1 flex items-center gap-1.5"><FileText size={12} /> MEDYA YÃƒÅ“KLE</h2>
+                            <h2 className="text-[10px] font-black text-indigo-400 mb-1 flex items-center gap-1.5"><FileText size={12} /> MEDYA YÜKLE</h2>
                             <div className="flex flex-wrap gap-2">
                                 {uiState.selectedMediaFiles && uiState.selectedMediaFiles.slice(0, 5).map((file, idx) => (
                                     <div key={idx} className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-700 shadow-md group">
@@ -4344,37 +4431,37 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* === GAZETE TAKÃ„Â°P GALERÃ„Â°SÃ„Â° === */}
+                    {/* === GAZETE TAKİP GALERİSİ === */}
                     {activeTab === 'gazete' && (
                         <div className="mb-3">
-                            {/* Kaynak seÃƒÂ§ici + Yenile */}
+                            {/* Kaynak seçici + Yenile */}
                             <div className="flex items-center gap-2 mb-3">
                                 <div className="flex-1 flex gap-1.5">
-                                    {[{id:'gazeteoku', label:'Gazeteoku (25+ Gazete)'}, {id:'aydinlik', label:'AydÃ„Â±nlÃ„Â±k'}, {id:'yenimesaj', label:'Yeni Mesaj'}].map(src => (
+                                    {[{id:'gazeteoku', label:'Gazeteoku (25+ Gazete)'}, {id:'aydinlik', label:'Aydınlık'}, {id:'yenimesaj', label:'Yeni Mesaj'}].map(src => (
                                         <button key={src.id} onClick={() => { setGazeteSource(src.id); }}
                                             className={`px-3 py-1.5 rounded-lg text-[10px] font-bold border transition-all ${gazeteSource === src.id ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-slate-800/50 text-slate-400 border-slate-700 hover:border-slate-500'}`}>
                                             {src.label}
                                         </button>
                                     ))}
                                 </div>
-                                <button onClick={fetchGazeteManÃ…Å¸etleri} disabled={gazeteLoading}
+                                <button onClick={fetchGazeteManşetleri} disabled={gazeteLoading}
                                     className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-300 px-3 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 border border-slate-700">
                                     {gazeteLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Yenile
                                 </button>
                             </div>
 
-                            {/* Hata mesajÃ„Â± */}
+                            {/* Hata mesajı */}
                             {gazeteError && (
                                 <div className="bg-rose-500/10 border border-rose-500/20 p-3 rounded-xl text-rose-400 text-xs font-bold mb-3 flex items-center gap-2">
                                     <AlertCircle size={14} /> {gazeteError}
                                 </div>
                             )}
 
-                            {/* YÃƒÂ¼kleniyor */}
+                            {/* Yükleniyor */}
                             {gazeteLoading && (
                                 <div className="text-center py-12">
                                     <Loader2 size={32} className="text-emerald-400 animate-spin mx-auto mb-3" />
-                                    <p className="text-slate-400 text-sm font-bold">Gazete manÃ…Å¸etleri yÃƒÂ¼kleniyor...</p>
+                                    <p className="text-slate-400 text-sm font-bold">Gazete manşetleri yükleniyor...</p>
                                 </div>
                             )}
 
@@ -4384,13 +4471,13 @@ export default function App() {
                                     <div className="flex items-center justify-between mb-2">
                                         <span className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider">{gazeteItems.length} gazete bulundu</span>
                                         <div className="flex gap-1">
-                                            <button onClick={() => setGazeteGalleryView('grid')} className={`p-1.5 rounded-lg text-[10px] ${gazeteGalleryView === 'grid' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>Ã¢â€“Â¦</button>
-                                            <button onClick={() => setGazeteGalleryView('single')} className={`p-1.5 rounded-lg text-[10px] ${gazeteGalleryView === 'single' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>Ã¢ËœÂ</button>
+                                            <button onClick={() => setGazeteGalleryView('grid')} className={`p-1.5 rounded-lg text-[10px] ${gazeteGalleryView === 'grid' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>▦</button>
+                                            <button onClick={() => setGazeteGalleryView('single')} className={`p-1.5 rounded-lg text-[10px] ${gazeteGalleryView === 'single' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-500'}`}>☐</button>
                                         </div>
                                     </div>
 
                                     {gazeteGalleryView === 'grid' ? (
-                                        /* GRID GÃƒâ€“RÃƒÅ“NÃƒÅ“MÃƒÅ“ Ã¢â‚¬â€ kÃƒÂ¼ÃƒÂ§ÃƒÂ¼k kartlar */
+                                        /* GRID GÖRÜNÜMÜ — küçük kartlar */
                                         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 max-h-[50vh] overflow-y-auto p-1">
                                             {gazeteItems.map((item, idx) => (
                                                 <div key={idx} className="group relative bg-slate-800/50 rounded-xl overflow-hidden border border-slate-700/50 hover:border-emerald-500/50 transition-all cursor-pointer"
@@ -4413,14 +4500,14 @@ export default function App() {
                                             ))}
                                         </div>
                                     ) : (
-                                        /* TEKLÃ„Â° GÃƒâ€“RÃƒÅ“NÃƒÅ“M Ã¢â‚¬â€ bÃƒÂ¼yÃƒÂ¼k ÃƒÂ¶nizleme */
+                                        /* TEKLİ GÖRÜNÜM — büyük önizleme */
                                         <div className="relative">
                                             <div className="flex items-center justify-between mb-2">
                                                 <button onClick={() => setGazeteCurrentIdx(Math.max(0, gazeteCurrentIdx - 1))} disabled={gazeteCurrentIdx === 0}
-                                                    className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Ã¢â€ Â Ãƒâ€“nceki</button>
+                                                    className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white px-3 py-1.5 rounded-lg text-xs font-bold">← Önceki</button>
                                                 <span className="text-white text-sm font-bold">{gazeteItems[gazeteCurrentIdx]?.name} <span className="text-slate-500">({gazeteCurrentIdx + 1}/{gazeteItems.length})</span></span>
                                                 <button onClick={() => setGazeteCurrentIdx(Math.min(gazeteItems.length - 1, gazeteCurrentIdx + 1))} disabled={gazeteCurrentIdx >= gazeteItems.length - 1}
-                                                    className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Sonraki Ã¢â€ â€™</button>
+                                                    className="bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Sonraki →</button>
                                             </div>
                                             <div className="relative bg-black/50 rounded-xl overflow-hidden border border-slate-700/50">
                                                 <img src={gazeteItems[gazeteCurrentIdx]?.src} crossOrigin="anonymous" className="w-full h-auto block" alt={gazeteItems[gazeteCurrentIdx]?.name} />
@@ -4441,12 +4528,12 @@ export default function App() {
                                 </div>
                             )}
 
-                            {/* BoÃ…Å¸ durum */}
+                            {/* Boş durum */}
                             {!gazeteLoading && gazeteItems.length === 0 && !gazeteError && (
                                 <div className="text-center py-12">
                                     <Newspaper size={48} className="text-slate-700 mx-auto mb-3" />
-                                    <p className="text-slate-500 text-sm font-bold">Gazete manÃ…Å¸etleri yÃƒÂ¼klenmedi</p>
-                                    <p className="text-slate-600 text-xs mt-1">YukarÃ„Â±daki "Yenile" butonuna tÃ„Â±klayÃ„Â±n</p>
+                                    <p className="text-slate-500 text-sm font-bold">Gazete manşetleri yüklenmedi</p>
+                                    <p className="text-slate-600 text-xs mt-1">Yukarıdaki "Yenile" butonuna tıklayın</p>
                                 </div>
                             )}
                         </div>
@@ -4462,26 +4549,26 @@ export default function App() {
                         />
                     )}
 
-                    {/* METÃ„Â°N GÃ„Â°RÃ„Â°Ã…ÂÃ„Â° (text/URL/prompt iÃƒÂ§in) */}
+                    {/* METİN GİRİŞİ (text/URL/prompt için) */}
                     {activeTab !== 'media' && activeTab !== 'gazete' && (
-                        <textarea value={textInput} onChange={e => setTextInput(e.target.value)} placeholder={(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? (activeTab === 'url' ? "Konu linkini yapÃ„Â±Ã…Å¸tÃ„Â±rÃ„Â±n..." : "Konu baÃ…Å¸lÃ„Â±Ã„Å¸Ã„Â± yazÃ„Â±n... (Ãƒâ€“rn: 'Ãƒâ€“zgÃƒÂ¼rlÃƒÂ¼Ã„Å¸ÃƒÂ¼n Bedeli', 'Adalet GÃƒÂ¼ÃƒÂ§lÃƒÂ¼ler Ã„Â°ÃƒÂ§in Mi?')") : (activeTab === 'url' ? "Haber linkini yapÃ„Â±Ã…Å¸tÃ„Â±rÃ„Â±n..." : "Haberi yazÃ„Â±n veya araÃ…Å¸tÃ„Â±rÃ„Â±lacak gÃƒÂ¼ndemi verin...")} className={`w-full h-20 bg-black/30 border rounded-xl p-3 text-sm outline-none mb-3 text-slate-200 resize-none transition-all relative z-0 ${activeTab === 'prompt' ? 'border-fuchsia-500/50 focus:border-fuchsia-500' : 'border-slate-800 focus:border-indigo-500'}`} />
+                        <textarea value={textInput} onChange={e => setTextInput(e.target.value)} placeholder={(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? (activeTab === 'url' ? "Konu linkini yapıştırın..." : "Konu başlığı yazın... (Örn: 'Özgürlüğün Bedeli', 'Adalet Güçlüler İçin Mi?')") : (activeTab === 'url' ? "Haber linkini yapıştırın..." : "Haberi yazın veya araştırılacak gündemi verin...")} className={`w-full h-20 bg-black/30 border rounded-xl p-3 text-sm outline-none mb-3 text-slate-200 resize-none transition-all relative z-0 ${activeTab === 'prompt' ? 'border-fuchsia-500/50 focus:border-fuchsia-500' : 'border-slate-800 focus:border-indigo-500'}`} />
                     )}
 
                     <div className="flex justify-between items-center mb-3 px-2">
                         {config.tip === 'iddia_analizi' ? (
-                            <span className="text-xs font-bold text-cyan-400 bg-cyan-500/10 px-3 py-1.5 rounded-full border border-cyan-500/20">Ã„Â°ddia Analizi Ã¢â‚¬â€ Fact Check + Video ÃƒÅ“retimi</span>
+                            <span className="text-xs font-bold text-cyan-400 bg-cyan-500/10 px-3 py-1.5 rounded-full border border-cyan-500/20">İddia Analizi — Fact Check + Video Üretimi</span>
                         ) : config.tip === 'guzel_soz' ? (
-                            <span className="text-xs font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">Felsefi Video Ã¢â‚¬â€ Hook + DÃƒÂ¼Ã…Å¸ÃƒÂ¼nÃƒÂ¼r SÃƒÂ¶zleri + CTA</span>
+                            <span className="text-xs font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20">Felsefi Video — Hook + Düşünür Sözleri + CTA</span>
                         ) : (<><span className="text-xs text-slate-500 flex items-center gap-1"><Type size={12} /> Dil: {getWPS(config.language)} kelime/sn</span>
                         <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 px-3 py-1.5 rounded-full border border-emerald-500/20">Hedef: ~{maxWordsUI} kelime</span></>)}
                     </div>
 
                     <div className="flex flex-col sm:flex-row gap-2 relative z-0">
                         <button onClick={() => handleExecuteStart(uiState.selectedMediaFiles, 'image')} disabled={uiState.isProcessing || ((config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? (!textInput.trim() && uiState.selectedMediaFiles.length === 0) : ((activeTab === 'media' || activeTab === 'gazete') ? uiState.selectedMediaFiles.length === 0 : !textInput.trim()))} className="flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 py-2.5 md:py-3 rounded-full font-medium text-xs transition-all border border-slate-700 flex items-center justify-center gap-2">
-                            {uiState.isProcessing && config.outputType === 'image' ? <><Loader2 size={16} className="animate-spin" /> Ã„Â°Ã…ÂLENÃ„Â°YOR...</> : <><ImagePlus size={16} /> {config.tip === 'iddia_analizi' ? 'Ã„Â°ddia Analizi Yap' : (config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'Kart OluÃ…Å¸tur' : 'GÃƒÂ¶rsel oluÃ…Å¸tur'}</>}
+                            {uiState.isProcessing && config.outputType === 'image' ? <><Loader2 size={16} className="animate-spin" /> İŞLENİYOR...</> : <><ImagePlus size={16} /> {config.tip === 'iddia_analizi' ? 'İddia Analizi Yap' : (config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'Kart Oluştur' : 'Görsel oluştur'}</>}
                         </button>
                         <button onClick={() => handleExecuteStart(uiState.selectedMediaFiles, 'video')} disabled={uiState.isProcessing || ((config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? (!textInput.trim() && uiState.selectedMediaFiles.length === 0) : ((activeTab === 'media' || activeTab === 'gazete') ? uiState.selectedMediaFiles.length === 0 : !textInput.trim()))} className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900/50 disabled:text-indigo-400 text-white py-2.5 md:py-3 rounded-full font-bold text-xs transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2">
-                            {uiState.isProcessing && config.outputType === 'video' ? <><Loader2 size={16} className="animate-spin" /> Ã„Â°Ã…ÂLENÃ„Â°YOR...</> : <>{config.tip === 'iddia_analizi' ? <><Eye size={16} /> Ã„Â°ddia Analizi</> : (config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? <><Wand2 size={16} /> GÃƒÂ¼zel SÃƒÂ¶z OluÃ…Å¸tur</> : <><Clapperboard size={16} /> Video oluÃ…Å¸tur</>}</>}
+                            {uiState.isProcessing && config.outputType === 'video' ? <><Loader2 size={16} className="animate-spin" /> İŞLENİYOR...</> : <>{config.tip === 'iddia_analizi' ? <><Eye size={16} /> İddia Analizi</> : (config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? <><Wand2 size={16} /> Güzel Söz Oluştur</> : <><Clapperboard size={16} /> Video oluştur</>}</>}
                         </button>
                     </div>
                 </div>
@@ -4494,26 +4581,26 @@ export default function App() {
                     </div>
                 )}
 
-                {/* Ãƒâ€¡IKTI */}
+                {/* ÇIKTI */}
                 {uiState.videoUrl && (
                     <div className="mt-8 bg-slate-900 border border-emerald-900/50 p-6 rounded-3xl shadow-2xl text-center">
                         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold mb-4">
-                            <ShieldCheck size={14} /> {(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'GÃƒÅ“ZEL SÃƒâ€“Z OLUÃ…ÂTURULDU' : (config.outputType === 'image' ? 'GÃƒâ€“RSEL OLUÃ…ÂTURULDU' : 'VIDEO OLUÃ…ÂTURULDU')}
+                            <ShieldCheck size={14} /> {(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'GÜZEL SÖZ OLUŞTURULDU' : (config.outputType === 'image' ? 'GÖRSEL OLUŞTURULDU' : 'VIDEO OLUŞTURULDU')}
                         </div>
                         {config.outputType === 'image' ? <img src={uiState.videoUrl} className="w-full max-w-md mx-auto rounded-2xl shadow-lg ring-1 ring-white/10 object-cover" alt="Output" /> : <video src={uiState.videoUrl} controls autoPlay className="w-full max-w-md mx-auto rounded-2xl shadow-lg ring-1 ring-white/10" />}
                         <div className="mt-4 flex justify-center gap-3 flex-wrap">
-                            <button onClick={() => { const a = document.createElement('a'); a.href = uiState.videoUrl; const rawTitle = workflowRef.current?.state?.script?.thumbnailText || 'video'; const ext = config.outputType === 'image' ? '.png' : (config.videoFormat === 'mp4' ? '.mp4' : '.webm'); a.download = rawTitle.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, "").trim().replace(/\s+/g, "_").toLowerCase() + ext; a.click(); }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><Download size={14} /> Ã„Â°NDÃ„Â°R</button>
-                            <button onClick={() => setShowSharePanel(!showSharePanel)} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><Share2 size={14} /> PAYLAÃ…Â</button>
-                            <button onClick={async () => { setUiState(prev => ({ ...prev, videoUrl: null, selectedMediaFiles: [], percent: 0, statusText: '', error: '' })); setConfig(prev => ({ ...prev, yorum: '' })); for (let i = 0; i < 999; i++) await AssetManagerService.deleteMedia("CUSTOM_SCENE_IMG_" + i); setStudioMedia(s => ({ ...s, customSceneImages: [] })); }} className="bg-slate-700 hover:bg-slate-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><RotateCcw size={14} /> {(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'YENÃ„Â° SÃƒâ€“Z' : 'YENÃ„Â° HABER'}</button>
+                            <button onClick={() => { const a = document.createElement('a'); a.href = uiState.videoUrl; const rawTitle = workflowRef.current?.state?.script?.thumbnailText || 'video'; const ext = config.outputType === 'image' ? '.png' : (config.videoFormat === 'mp4' ? '.mp4' : '.webm'); a.download = rawTitle.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9\s]/g, "").trim().replace(/\s+/g, "_").toLowerCase() + ext; a.click(); }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><Download size={14} /> İNDİR</button>
+                            <button onClick={() => setShowSharePanel(!showSharePanel)} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><Share2 size={14} /> PAYLAŞ</button>
+                            <button onClick={async () => { setUiState(prev => ({ ...prev, videoUrl: null, selectedMediaFiles: [], percent: 0, statusText: '', error: '' })); setConfig(prev => ({ ...prev, yorum: '' })); for (let i = 0; i < 999; i++) await AssetManagerService.deleteMedia("CUSTOM_SCENE_IMG_" + i); setStudioMedia(s => ({ ...s, customSceneImages: [] })); }} className="bg-slate-700 hover:bg-slate-600 text-white px-5 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2"><RotateCcw size={14} /> {(config.tip === 'guzel_soz' || config.tip === 'iddia_analizi') ? 'YENİ SÖZ' : 'YENİ HABER'}</button>
                         </div>
 
                         {showSharePanel && (
                             <div className="mt-4 bg-slate-800 border border-slate-700 rounded-2xl p-4">
                                 <div className="flex items-center justify-between mb-3">
-                                    <h3 className="text-sm font-bold text-white">Sosyal Medya PaylaÃ…Å¸Ã„Â±mÃ„Â±</h3>
-                                    <button onClick={() => setShowSharePanel(false)} className="text-slate-400 hover:text-white">Ã¢Å“â€¢</button>
+                                    <h3 className="text-sm font-bold text-white">Sosyal Medya Paylaşımı</h3>
+                                    <button onClick={() => setShowSharePanel(false)} className="text-slate-400 hover:text-white">✕</button>
                                 </div>
-                                {/* HÃ„Â±zlÃ„Â± seÃƒÂ§im butonlarÃ„Â±: X, TikTok, Instagram, Facebook */}
+                                {/* Hızlı seçim butonları: X, TikTok, Instagram, Facebook */}
                                 <div className="flex gap-2 mb-3">
                                     {['x', 'tiktok', 'instagram', 'facebook'].map(pid => {
                                         const p = SOCIAL_PLATFORMS.find(pl => pl.id === pid);
@@ -4532,14 +4619,14 @@ export default function App() {
                                                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: platform.color }} />
                                                 <span className="text-xs font-bold text-white">{platform.name}</span>
                                             </div>
-                                            {connectedPlatforms[platform.id] && <span className="text-[10px] text-emerald-400 mt-1 block">BaÃ„Å¸lÃ„Â±</span>}
+                                            {connectedPlatforms[platform.id] && <span className="text-[10px] text-emerald-400 mt-1 block">Bağlı</span>}
                                         </div>
                                     ))}
                                 </div>
                                 <div className="flex gap-2">
-                                    <button onClick={shareToSelectedPlatforms} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1"><Share2 size={14} /> SeÃƒÂ§ilenlerde PaylaÃ…Å¸</button>
+                                    <button onClick={shareToSelectedPlatforms} className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1"><Share2 size={14} /> Seçilenlerde Paylaş</button>
                                     <button onClick={copyShareLink} className="bg-slate-700 hover:bg-slate-600 text-white px-4 py-2 rounded-lg text-xs font-bold"><Copy size={14} /></button>
-                                    {typeof navigator !== 'undefined' && navigator.share && <button onClick={nativeShare} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold">Cihazda PaylaÃ…Å¸</button>}
+                                    {typeof navigator !== 'undefined' && navigator.share && <button onClick={nativeShare} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-xs font-bold">Cihazda Paylaş</button>}
                                 </div>
                             </div>
                         )}
@@ -4547,7 +4634,7 @@ export default function App() {
                 )}
             </div>
 
-            {/* Ã„Â°Ã…ÂLEM EKRANI */}
+            {/* İŞLEM EKRANI */}
             {uiState.isProcessing && (
                 <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
                     <div className="bg-slate-900 border border-indigo-500/30 w-full max-w-lg p-6 md:p-8 rounded-3xl shadow-2xl relative overflow-hidden text-center">
@@ -4555,7 +4642,7 @@ export default function App() {
                         <div className="w-14 h-14 rounded-full bg-indigo-500/10 flex items-center justify-center mx-auto mb-4"><Loader2 size={28} className="text-indigo-400 animate-spin" /></div>
                         <h2 className="text-5xl font-black text-white mb-2">{Math.round(uiState.percent)}%</h2>
                         <p className="text-indigo-400 font-bold text-sm mb-3 uppercase tracking-widest">{uiState.statusText}</p>
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 text-slate-400 text-xs font-mono mb-4 border border-slate-700/50"><Clock size={12} /> GeÃƒÂ§en: {elapsedSeconds}sn</div>
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 text-slate-400 text-xs font-mono mb-4 border border-slate-700/50"><Clock size={12} /> Geçen: {elapsedSeconds}sn</div>
                         {sysLogs && sysLogs.length > 0 && (
                             <div className="mt-4 bg-slate-950/90 border border-slate-800 rounded-2xl p-4 text-left font-mono text-[11px] leading-relaxed max-h-48 overflow-y-auto space-y-1.5">
                                 {sysLogs.map((log, idx) => { let c = "text-slate-400"; if (log.type === "success") c = "text-emerald-400 font-bold"; if (log.type === "warn") c = "text-amber-400 font-bold"; if (log.type === "error") c = "text-rose-400 font-bold animate-pulse"; return (<div key={idx} className={`flex items-start gap-2 ${c}`}><span className="text-slate-600 shrink-0 select-none">[{log.timestamp}]</span><span className="break-all">{log.text}</span></div>); })}
@@ -4570,12 +4657,12 @@ export default function App() {
             {authExpired && (
                 <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-xl z-[9999] flex items-center justify-center p-4">
                     <div className="bg-slate-900 border-2 border-red-500/40 w-full max-w-md p-8 rounded-3xl shadow-2xl text-center">
-                        <h2 className="text-2xl font-black text-white mb-3">OTURUM SÃƒÅ“RESÃ„Â° DOLDU</h2>
-                        <p className="text-slate-400 text-sm mb-6">LÃƒÂ¼tfen sayfayÃ„Â± yenileyin.</p>
+                        <h2 className="text-2xl font-black text-white mb-3">OTURUM SÜRESİ DOLDU</h2>
+                        <p className="text-slate-400 text-sm mb-6">Lütfen sayfayı yenileyin.</p>
                         <div className="flex flex-col gap-3">
-                            <button onClick={handleSilentRecovery} className="w-full bg-gradient-to-r from-emerald-600 to-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2"><ShieldCheck size={16} /> OTURUMU YENÃ„Â°LE</button>
-                            <button onClick={() => setAuthExpired(false)} className="w-full bg-slate-800 text-slate-300 font-bold py-3 rounded-xl text-xs">GÃƒâ€“ZARDI ET</button>
-                            <button onClick={() => window.location.reload()} className="w-full bg-red-600/20 text-red-400 font-bold py-3 rounded-xl text-xs border border-red-500/30">SAYFAYI YENÃ„Â°LE (F5)</button>
+                            <button onClick={handleSilentRecovery} className="w-full bg-gradient-to-r from-emerald-600 to-indigo-600 text-white font-bold py-3 rounded-xl text-sm flex items-center justify-center gap-2"><ShieldCheck size={16} /> OTURUMU YENİLE</button>
+                            <button onClick={() => setAuthExpired(false)} className="w-full bg-slate-800 text-slate-300 font-bold py-3 rounded-xl text-xs">GÖZARDI ET</button>
+                            <button onClick={() => window.location.reload()} className="w-full bg-red-600/20 text-red-400 font-bold py-3 rounded-xl text-xs border border-red-500/30">SAYFAYI YENİLE (F5)</button>
                         </div>
                     </div>
                 </div>
