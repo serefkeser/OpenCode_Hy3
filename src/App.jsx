@@ -439,9 +439,9 @@ const callNvidiaChat = async (systemPrompt, userPrompt, opts = {}) => {
     return _parseAIContent(content, opts.json);
 };
 
-// Metni Gemini'den üret (fallback)
+// Metni Gemini'den üret (fallback) — ayrı Gemini key kullanır
 const callGeminiChat = async (systemPrompt, userPrompt, opts = {}) => {
-    const key = getApiKey(); // Aynı UI alanı Gemini key olarak da kullanılabilir
+    const key = getGeminiKey();
     if (!key) throw new Error('Gemini API anahtarı girilmemiş.');
     const payload = {
         systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -477,21 +477,31 @@ const _parseAIContent = (content, isJson) => {
     }
 };
 
-// ANA FALLBACK ZİNCİRİ: önce NVIDIA, sonra Gemini ücretsiz modelleri
+// ANA FALLBACK ZİNCİRİ: önce NVIDIA, sonra Gemini ücretsiz modelleri.
+// NVIDIA key yoksa direkt Gemini'ye geçilir; Gemini key de yoksa hata verilir.
 const callAI = async (systemPrompt, userPrompt, opts = {}) => {
-    try {
-        const res = await callNvidiaChat(systemPrompt, userPrompt, opts);
-        addSystemLog('Metin NVIDIA ile üretildi.', 'success');
-        return res;
-    } catch (nvErr) {
-        addSystemLog('NVIDIA başarısız, Gemini ücretsiz modele geçiliyor: ' + nvErr.message, 'warn');
+    const hasNv = !!getApiKey();
+    const hasGem = !!getGeminiKey();
+    if (!hasNv && !hasGem) throw new Error('Hiçbir API anahtarı girilmemiş. NVIDIA veya Gemini key gerekli.');
+    if (hasNv) {
+        try {
+            const res = await callNvidiaChat(systemPrompt, userPrompt, opts);
+            addSystemLog('Metin NVIDIA ile üretildi.', 'success');
+            return res;
+        } catch (nvErr) {
+            addSystemLog('NVIDIA başarısız, Gemini ücretsiz modele geçiliyor: ' + nvErr.message, 'warn');
+        }
+    }
+    if (hasGem) {
         try {
             const res = await callGeminiChat(systemPrompt, userPrompt, opts);
             addSystemLog('Metin Gemini fallback ile üretildi.', 'success');
             return res;
         } catch (gmErr) {
-            throw new Error(`Tüm AI sağlayıcıları başarısız. NVIDIA: ${nvErr.message} | Gemini: ${gmErr.message}`);
+            throw new Error(`Tüm AI sağlayıcıları başarısız. ${hasNv ? 'NVIDIA: ' + nvErr?.message + ' | ' : ''}Gemini: ${gmErr.message}`);
         }
+    } else {
+        throw new Error('NVIDIA başarısız ve Gemini anahtarı girilmemiş. Lütfen Gemini key girin.');
     }
 };
 
@@ -527,13 +537,20 @@ const fetchWithCorsProxy = async (url) => {
 };
 
 // API anahtarı artık UI'dan girilir (sessionStorage). Kodda hardcoded değil.
-// Önce UI'dan girilen NVIDIA key'ini oku, yoksa boş string döner.
+// NVIDIA ve Gemini ayrı anahtarlarla çalışır (farklı formatlarda).
 const NV_API_KEY_STORAGE = 'ns_nvidiaKey';
+const GEMINI_API_KEY_STORAGE = 'ns_geminiKey';
 const getApiKey = () => {
     try { return sessionStorage.getItem(NV_API_KEY_STORAGE) || ''; } catch (e) { return ''; }
 };
 const setApiKey = (k) => {
     try { if (k) sessionStorage.setItem(NV_API_KEY_STORAGE, k); else sessionStorage.removeItem(NV_API_KEY_STORAGE); } catch (e) {}
+};
+const getGeminiKey = () => {
+    try { return sessionStorage.getItem(GEMINI_API_KEY_STORAGE) || ''; } catch (e) { return ''; }
+};
+const setGeminiKey = (k) => {
+    try { if (k) sessionStorage.setItem(GEMINI_API_KEY_STORAGE, k); else sessionStorage.removeItem(GEMINI_API_KEY_STORAGE); } catch (e) {}
 };
 
 const SafeStorage = {
@@ -1567,9 +1584,9 @@ class MediaSynthesisService {
                 return images[0];
             }
         } catch (err) { addSystemLog('Wikimedia görsel araması başarısız: ' + err.message, 'warn'); }
-        // 2. Gemini ücretsiz model ile görsel üret (key varsa)
+        // 2. Gemini ücretsiz model ile görsel üret (ayrı Gemini key varsa)
         try {
-            const key = getApiKey();
+            const key = getGeminiKey();
             if (key) {
                 for (const model of GEMINI_FALLBACK_MODELS) {
                     try {
@@ -1601,8 +1618,8 @@ class MediaSynthesisService {
         if (cleanText.length < 2) return null;
         const estDuration = Math.max(2.0, (cleanText.split(/\s+/).length / 2.5));
 
-        // 1. Gemini ücretsiz TTS (key varsa) — gerçek WAV ses döndürür
-        const key = getApiKey();
+        // 1. Gemini ücretsiz TTS (ayrı Gemini key varsa) — gerçek WAV ses döndürür
+        const key = getGeminiKey();
         if (key) {
             try {
                 const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${key}`;
@@ -3516,15 +3533,17 @@ export default function App() {
 
     const [uiState, setUiState] = useState({ isProcessing: false, statusText: '', percent: 0, error: '', videoUrl: null, showDevMenu: false, selectedMediaFiles: [] });
 
-    // NVIDIA API key + model (sessionStorage'da tutulur, kodda hardcoded değil)
+    // NVIDIA + Gemini API key'leri + model (sessionStorage'da tutulur, kodda hardcoded değil)
     const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey());
+    const [geminiKeyInput, setGeminiKeyInput] = useState(() => getGeminiKey());
     const [nvidiaModel, setNvidiaModel] = useState(() => NV_MODEL);
-    const [showApiKeyPanel, setShowApiKeyPanel] = useState(() => !getApiKey());
+    const [showApiKeyPanel, setShowApiKeyPanel] = useState(() => !getApiKey() && !getGeminiKey());
     const saveApiKey = () => {
         setApiKey(apiKeyInput.trim());
+        setGeminiKey(geminiKeyInput.trim());
         const m = nvidiaModel.trim() || NV_MODEL;
         setNvidiaModel(m);
-        addSystemLog('NVIDIA API anahtarı kaydedildi.', 'success');
+        addSystemLog('API anahtarları kaydedildi (NVIDIA + Gemini).', 'success');
         setShowApiKeyPanel(false);
     };
 
@@ -4371,21 +4390,31 @@ export default function App() {
     return (
         <div className="min-h-screen bg-[#0B0F19] text-slate-200 font-sans p-3 md:p-4 relative overflow-hidden">
             <div className="max-w-3xl mx-auto">
-                {/* NVIDIA API KEY PANELİ */}
+                {/* NVIDIA + GEMINI API KEY PANELİ */}
                 {showApiKeyPanel && (
                     <div className="mb-4 p-4 rounded-2xl bg-slate-900 border border-amber-500/40 shadow-lg">
                         <div className="flex items-center gap-2 mb-2">
                             <ShieldCheck size={18} className="text-amber-400" />
-                            <h2 className="text-sm font-bold text-amber-300">NVIDIA API Anahtarı Gerekli</h2>
+                            <h2 className="text-sm font-bold text-amber-300">API Anahtarları Gerekli</h2>
                         </div>
-                        <p className="text-xs text-slate-400 mb-3">NVIDIA (önce) veya Gemini ücretsiz API key girin. Anahtar tarayıcınızda (sessionStorage) saklanır, koda gömülmez. NVIDIA başarısız olursa otomatik Gemini'ye düşer.</p>
+                        <p className="text-xs text-slate-400 mb-3">NVIDIA (metin, önce) ve Gemini (görsel + TTS + fallback metin) ayrı anahtarlardır. Anahtarlar tarayıcıda (sessionStorage) saklanır, koda gömülmez. NVIDIA başarısız olursa otomatik Gemini'ye düşer.</p>
+                        <label className="block text-xs text-slate-400 mb-1">NVIDIA API Key (nvapi-...)</label>
                         <input
                             type="password"
                             value={apiKeyInput}
                             onChange={(e) => setApiKeyInput(e.target.value)}
                             placeholder="nvapi-..."
-                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white mb-2 focus:outline-none focus:border-amber-400"
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white mb-3 focus:outline-none focus:border-amber-400"
                         />
+                        <label className="block text-xs text-slate-400 mb-1">Gemini API Key (AIza...)</label>
+                        <input
+                            type="password"
+                            value={geminiKeyInput}
+                            onChange={(e) => setGeminiKeyInput(e.target.value)}
+                            placeholder="AIza..."
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white mb-3 focus:outline-none focus:border-amber-400"
+                        />
+                        <label className="block text-xs text-slate-400 mb-1">NVIDIA Model</label>
                         <input
                             type="text"
                             value={nvidiaModel}
@@ -4402,8 +4431,8 @@ export default function App() {
                 {!showApiKeyPanel && (
                     <button
                         onClick={() => setShowApiKeyPanel(true)}
-                        className="mb-3 flex items-center gap-2 text-xs text-slate-400 hover:text-amber-300 transition-colors"
-                    ><ShieldCheck size={14} /> API Key: {apiKeyInput ? '•••••• ' + apiKeyInput.slice(-4) : 'yok'} (değiştir)</button>
+                        className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-400 hover:text-amber-300 transition-colors"
+                    ><ShieldCheck size={14} /> NVIDIA: {apiKeyInput ? '•••• ' + apiKeyInput.slice(-4) : 'yok'} <span className="text-slate-600">|</span> Gemini: {geminiKeyInput ? '•••• ' + geminiKeyInput.slice(-4) : 'yok'} <span className="text-amber-300">(değiştir)</span></button>
                 )}
 
                 <div className="text-center mb-4 flex items-center justify-center gap-3">
