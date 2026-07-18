@@ -1,398 +1,4 @@
-// ============================================================================
-// OTONOM — H1.151 (Gemini Canvas — super calisiyor-3 tabanlı, tam uyumlu)
-// Gemini AI Studio Canvas Uyumlu Versiyon
-// Değişiklikler: Instagram/TikTok safe zone — altyazı h*0.72, SAFE_ZONE sabiti, pozisyon düzeltmeleri
-// ============================================================================
-// Akış: S1 → M1 analiz → 2 AI görsel → S2 → M2 analiz → 2 AI görsel → ...
-// Sabit görsel sadece 1. sahneye atanır, medyayı anlatan 2 görsel AI üretir
-// Çoklu blokta süre sınırı yok — doğal okuma hızında bitir
-// Seslendirme daima %80, arka plan müzik daima %29
-//
-// === CHANGELOG ===
-// H1.151: Bug fix release — Türkçe karakterli fonksiyon adı düzeltildi (fetchGazeteMansetleri), renderSonSozScene yorumAudioEnd atama fix, Gazete crop modal clipPath browser uyumluluğu (4-div overlay), bgmInitialized scope fix
-// H1.150: Yorum+son söz birleşik render, ses bitişi garantili, boşluk fix korundu
-// H1.149: Yorum bitmeden kapanışa geçme fix — yorum varsa sadece yorum okunur, AI son söz yok; tek medyada başlık yok; sahneler arası boşluk eklendi
-// H1.148: Kelime bazlı zamanlama, sessizlik kırpma, fade 150ms, ses boşluğu 0.05sn
-// H1.147: trUpper() Türkçe karakter fix, thumbnail maks 5sn, son söz tekrar önleme
-// H1.146: Ekonomi enjeksiyonu kaldırıldı, validateTurkishText genişletildi
-// H1.145: Clickbait ses bekleme kaldırıldı, haber'de kaynaklar sahnesi kaldırıldı
-// H1.144: Clickbait kare fix (999→3), 4 bug fix (bgmInitialized, extractStatsHint, validateEconomyData, TDZ)
-// H1.143: Orijinal
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Download, RotateCcw, UploadCloud, Music, Trash2, Volume2, Clock, Loader2, Copy, AlertCircle, Activity, Server, Database, ShieldCheck, ImagePlus, Smartphone, Clapperboard, Type, Palette, Globe, MessageSquare, Monitor, Filter, Wand2, CloudRain, ChevronDown, Film, FileText, Layers, RefreshCw, Share2, Check, Link2, Newspaper, Scissors, ExternalLink, Eye } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
-
-// Google Drive Müzik Kütüphanesi — Herkese açık klasörden stream
-// Klasör: https://drive.google.com/drive/folders/1HGlMbZ2XW_2-dUTXaIx5zZYqgYOhN71Y
-const GOOGLE_DRIVE_FOLDER_ID = '1HGlMbZ2XW_2-dUTXaIx5zZYqgYOhN71Y';
-const GOOGLE_DRIVE_MUSIC_FALLBACK = [
-    { id: '1fckmJ50fyjKPlNZjJ2NY7TtG36dz2gXV', name: 'Neden Bay Anderson Neden [HQ]' },
-    { id: '1lbjT7fnxNA5gpt0O5T79IDGQZDUj7Vr3', name: 'Adaletin Bu Mu Dünya' },
-    { id: '1CPwd7UlXRxaU80o4QG_oUS6M3LS0s_4v', name: 'Ağladım Anne' },
-    { id: '1ctOL71yLEH8fZvfR6N1gkMNtJbfbFZ0B', name: 'Arar Buluruz' },
-    { id: '1hyWxILLLF6Wai6hrij7MGRwXK52ou_kE', name: 'Atemlos Durch Die Nacht' },
-    { id: '1_lUdXqcm6bDkgoTS-frg9BWy4r3KZQSd', name: 'Autobahn' },
-    { id: '1TiAYJaa4yHP5Idy7EBOs8a71IJSDTY0u', name: 'Baller Los' },
-    { id: '1eLcf9Xq3kUlBiJjdveD7C_UUGowEHtbs', name: 'Ben Yoruldum Hayat' },
-    { id: '1ZKDdXyB1zHFptIkrZqDpzf4DUbd2lk8R', name: 'Benim Babam Fatih Kısaparmak' },
-    { id: '1wqKH4NLpFte0bvJ9f5VDu0DiNXK7zx9A', name: 'Benim Sevdam Murattır' },
-    { id: '1LXcQ31RzboqTC0tsCGq9OJ3PuyNLZ-jk', name: 'Big In Japan' },
-    { id: '1PE41TiHdwxFPJxui4c-tIFyFnZY5Z_qv', name: 'Billie Jean Michael' },
-    { id: '14byzbYGcpQ3Lcn7cMpwLOAsZS9NCfKLR', name: 'Bir Daha Gel Samsundan' },
-    { id: '1WCOxgw2kDE5fgOfwE-IQe2qfGvFZBCi1', name: 'Bir Başkadır Benim Memleketim' },
-    { id: '1S4V4-DV_5vsrqcIuHcc2lcCJOuZg-M1V', name: 'Bob Marley Sözü' },
-    { id: '1EPxt8HjU_xD_hVI-IbBt_RIc_nf_WpXM', name: 'Bonİem Deri Ku' },
-    { id: '1GRf_fmbdJDsiKed0--0g5ntdaDj7QpXC', name: 'Bonİem Rasputin' },
-    { id: '1pjL3AHHRNOu8wColddhTPBzifWwgKSw6', name: 'Bozulma Sesi' },
-    { id: '1TGiR7Mga_Hs19awI4BzHb9Uz2lYrRMIw', name: 'Breaking News Intro 368192' },
-    { id: '1oVxOCcFTW0F4HEuIisNRwzFu3_wyv22b', name: 'Breaking News Intro 408079' },
-    { id: '1ENd5gIFv8CxpIsNj9FpmnaUlrhF_xzLI', name: 'Breaking News Logo' },
-    { id: '1UeoHs0B8VxShDkvwtQ3s7W6vWAS4lTOb', name: 'Bu Can Senin' },
-    { id: '13vzuK7GtDhnzFtcHzet6CfvPjd1KxPLg', name: 'Bugün Vatan Haini Dedikleriniz' },
-    { id: '1tjfWRwf9yablxOqPceHIHQyaRFseQqm2', name: 'By By Lorenz' },
-    { id: '1ufZyYB0M7FBcAC1-psKWIknkmjRY1HBn', name: 'Bıraktım Geldim' },
-    { id: '1YNO40g_xSKxZRlXsFcNfOim7sqYBPvc8', name: 'Care About Us Michael' },
-    { id: '1zGC_bBm_N5jZ_cXGJ_HpXYP7GEEvjq3z', name: 'Çav Bella' },
-    { id: '1LkDJVNtVDxGnccE7a5K1dF3ONlCMGKfZ', name: 'Cheri Cheri Lady' },
-    { id: '1jza2hYRD_-QAAqPioYhUvu1IYQqwwmsZ', name: 'Dağlarımı Yazdın' },
-    { id: '1aodeAR6lr--uEH20wnNenMWK4BrV7c1X', name: 'Deha Uzun' },
-    { id: '1sPessumRxdR5eudd6oRsykugy2aN5lxc', name: 'Deha' },
-    { id: '1CObBxFdjPP84h1G6Bo3PYPmshZvd7Wg7', name: 'Denizlerin Dalgasıyım' },
-    { id: '1i-xgibUoNuM0p9a_P5F6PRqr0ojit82O', name: 'Devrim Müziği' },
-    { id: '1jdjDI0tAXYIJ-jsj668xsEBvbKdLH9n5', name: 'Dingin Piyano' },
-    { id: '1_lGFSL34j-4mB7CK3DELIlOrjYEolJ5f', name: 'Don Gel Bir Tanem' },
-    { id: '1e4segU73qgsMCEl6dobRlH7s2slVeZj8', name: 'Ece Üner Emekli Vekiller' },
-    { id: '1tYwQg5zRZVy03MbrFvb6azMpgPptXrqL', name: 'Epic News 60sn' },
-    { id: '1SHw99FfHYnhd8rHxW1GlYl8HbaFN2eE2', name: 'Epic News Loop' },
-    { id: '1QMwc58BKoGMpreZUUg3u9qRW-ojcGY8k', name: 'First Light On The Square' },
-    { id: '1_dW9DhaTeuibtsbMRFMGRMsD4lBTx4hA', name: 'Forever Young' },
-    { id: '1k-D1_2v6t9m0xicg3n7n69QyvsQJ2Cic', name: 'Gazete Bayısı Hasret' },
-    { id: '17fQqVEtHWDu9HIhiJ80v2p-t0t5ewC0_', name: 'Gençligime Sevgilerimle' },
-    { id: '1SqiR1z9lCqpTE5kq4D12815zAFo9VOPu', name: 'Gönül Dağı Neşet Ertaş' },
-    { id: '1PYQjY-LaCczsLKqeu_fSvbQv6b8GJaQB', name: 'Great News Epic' },
-    { id: '1OuzY26bX0XGZBLV0kWV5v9C87VZl6YS_', name: 'Gül Ki Güller Açsın' },
-    { id: '15p9isCr_d4fJ5Q9-oj0llUqCNFKSXr_G', name: 'Gururla Bakıyorum Dünyaya' },
-    { id: '1OpooQmoM73RVWdGja085EdDROLhRB-4X', name: 'Güzel Günler Göreceğiz' },
-    { id: '1W_IGXst-ld5KORW2DIXdeHhzcnPVPlg2', name: 'Hakim Bey' },
-    { id: '1x7KZlCtk3WfoUwXOsSv-1L6Kb5Ggm_P9', name: 'Haram Saltanatı' },
-    { id: '13iuVl_o7lhut0B7WpkNY2TfbCv03kyDF', name: 'Hatıra Niyeter' },
-    { id: '1PqnGpIDRXEEQ1hNSbBZttiZK4kZnc8Bk', name: 'Hodri Meydan' },
-    { id: '1x8pVppkNi_8dvpMvyQYAqZN-xhKYfRr-', name: 'İnci Taneleri' },
-    { id: '1tt8GuYplrXgmCuOnNZ3Z0miZVSHvi_Uj', name: 'İsveçli Filistin Şarkısı' },
-    { id: '16d6Ye8ZnoMLICG0ABCi4N_u2PQNncSzJ', name: 'İsyan Ateş' },
-    { id: '1H2Dl5X6np3M54ey8u9Z43s4jtheDrkGe', name: 'İzmir Marşı' },
-    { id: '1K7WLsRZS_IMVf104isbkNFzc0dXxwY5M', name: 'İçerde Tık Tık Tık' },
-    { id: '15WLlngwPYQjX_CxL-VT6yMnrLZdlg7rG', name: 'İçerde' },
-    { id: '1hNVWXpxVQG9SXU23BHyuYVj3HM5ZuRb_', name: 'Kabede Hacılar Hu Der Allah' },
-    { id: '1ZT9U7Xbn3WxnqBrIhK3ZJNLVvZGMHaUn', name: 'Lili Marleen' },
-    { id: '11KeMcM87VUPFoP8ZBVz0oLM-uZ-dywVx', name: 'Lucenzo' },
-    { id: '1uamxVWbe2A5enlu8AaSyuWv4Eg6x__N-', name: 'Major Tom' },
-    { id: '1hEEgGkNaDYzQy_59RYjkyofvrPxr-9BX', name: 'Merdo' },
-    { id: '1jzDATcfwfINACpXbwMKJM2ZjBzsIAO-X', name: 'Michael Tüm Şarkıları' },
-    { id: '1N5xtO7fzW0qbvIsyTtTBLJTwzX7NNSEy', name: 'Minnet Eylemem' },
-    { id: '1bXh7k-vc5wAamzvELdaQTLjNdSB69-tC', name: 'Annemize Türkü' },
-];
-
-// Runtime'da güncellenecek — fetch ile tüm parçaları tutar
-let GOOGLE_DRIVE_MUSIC = [...GOOGLE_DRIVE_MUSIC_FALLBACK];
-
-// Google Apps Script URL — deploy edildikten sonra buraya yazın
-// script.google.com/macros/s/AKfycbx... formatında olacak
-const GDRIVE_APPS_SCRIPT_URL = '';
-
-// Google Drive klasöründen tüm müzikleri çek
-// Öncelik: Apps Script > Proxy > Doğrudan Fetch > CORS Proxy > Fallback
-const fetchGoogleDriveMusic = async () => {
-    const cacheKey = 'gd_music_cache';
-    const folderUrl = `https://drive.google.com/drive/folders/${GOOGLE_DRIVE_FOLDER_ID}`;
-    let allSongs = [...GOOGLE_DRIVE_MUSIC_FALLBACK]; // Her zaman fallback ile başla
-
-    // 1. Cache varsa kullan (1 saat geçerli) — fallback ile birleştir
-    try {
-        const cached = sessionStorage.getItem(cacheKey);
-        if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed.data && parsed.data.length > 0 && (Date.now() - parsed.ts < 3600000)) {
-                const cachedIds = new Set(parsed.data.map(m => m.id));
-                const missingFallback = GOOGLE_DRIVE_MUSIC_FALLBACK.filter(m => !cachedIds.has(m.id));
-                allSongs = [...parsed.data, ...missingFallback];
-                GOOGLE_DRIVE_MUSIC = allSongs;
-                // Cache'de yeni şarkı varsa devam et, yoksa dön
-                if (parsed.data.length >= GOOGLE_DRIVE_MUSIC_FALLBACK.length) return allSongs.length;
-            }
-        }
-    } catch (e) {}
-
-    // 2. Google Apps Script ile çek (CORS engeli yok — Google domain)
-    if (GDRIVE_APPS_SCRIPT_URL) {
-        try {
-            const resp = await fetch(`${GDRIVE_APPS_SCRIPT_URL}?folderId=${GOOGLE_DRIVE_FOLDER_ID}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                if (Array.isArray(data) && data.length > 0) {
-                    const existingIds = new Set(allSongs.map(m => m.id));
-                    const newSongs = data.filter(f => f.id && f.name && !existingIds.has(f.id));
-                    if (newSongs.length > 0) {
-                        allSongs = [...allSongs, ...newSongs];
-                        GOOGLE_DRIVE_MUSIC = allSongs;
-                        try { sessionStorage.setItem(cacheKey, JSON.stringify({ data: allSongs, ts: Date.now() })); } catch (e) {}
-                        addSystemLog(`Apps Script: ${newSongs.length} yeni şarkı eklendi. Toplam: ${allSongs.length}`, 'success');
-                        return allSongs.length;
-                    }
-                }
-            }
-        } catch (e) { addSystemLog('Apps Script hatası: ' + e.message, 'warn'); }
-    }
-
-    // 3. Müzik proxy sunucusu ile çek
-    const proxyUrl = await getMusicProxyUrl();
-    if (proxyUrl) {
-        try {
-            const resp = await fetch(`${proxyUrl}/music/list/${GOOGLE_DRIVE_FOLDER_ID}`, {
-                headers: { 'ngrok-skip-browser-warning': 'true' }
-            });
-            if (resp.ok) {
-                const data = await resp.json();
-                if (Array.isArray(data) && data.length > 0) {
-                    const existingIds = new Set(allSongs.map(m => m.id));
-                    const newSongs = data.filter(f => f.id && f.name && !existingIds.has(f.id));
-                    if (newSongs.length > 0) {
-                        allSongs = [...allSongs, ...newSongs];
-                        GOOGLE_DRIVE_MUSIC = allSongs;
-                        try { sessionStorage.setItem(cacheKey, JSON.stringify({ data: allSongs, ts: Date.now() })); } catch (e) {}
-                        return allSongs.length;
-                    }
-                }
-            }
-        } catch (e) {}
-    }
-
-    // 4. Doğrudan fetch + CORS proxy ile çek
-    let html = '';
-    try {
-        const resp = await fetch(folderUrl);
-        const text = await resp.text();
-        if (text.length > 5000 && !text.includes('Sign in')) html = text;
-    } catch (e) {}
-    if (!html) {
-        const proxies = [
-            (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-            (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-            (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-        ];
-        for (const proxy of proxies) {
-            try {
-                const resp = await fetch(proxy(folderUrl));
-                const text = await resp.text();
-                if (text.length > 5000 && !text.includes('Sign in')) { html = text; break; }
-            } catch (e) {}
-        }
-    }
-    if (html) {
-        const existingIds = new Set(allSongs.map(m => m.id));
-        const patterns = [
-            /\["([a-zA-Z0-9_-]{25,})",\["([^"]+?\.(?:mp3|wav|ogg|m4a|flac|aac))"/gi,
-            /"([a-zA-Z0-9_-]{25,})"[^}]*?"([^"]+?\.(?:mp3|wav|ogg|m4a|flac|aac))"/gi,
-            /data-id="([a-zA-Z0-9_-]{25,})"[^>]*>([^<]+?\.(?:mp3|wav|ogg|m4a|flac|aac))/gi
-        ];
-        for (const regex of patterns) {
-            let match;
-            while ((match = regex.exec(html)) !== null) {
-                const id = match[1];
-                const name = match[2].replace(/\.[^.]+$/, '');
-                if (!existingIds.has(id)) {
-                    allSongs.push({ id, name });
-                    existingIds.add(id);
-                }
-            }
-        }
-    }
-
-    // Sonuçları kaydet ve döndür
-    GOOGLE_DRIVE_MUSIC = allSongs;
-    try { sessionStorage.setItem(cacheKey, JSON.stringify({ data: allSongs, ts: Date.now() })); } catch (e) {}
-    return allSongs.length;
-};
-
-// ============================================================
-// MÜZİK PROXY AYARLARI
-// linkedin_server.py çalışırken bu URL'yi ngrok URL'nizle değiştirin
-// Örnek: 'https://xxxx.ngrok-free.dev/music/proxy'
-// Sunucu yoksa boş bırakın — doğrudan Google Drive denenir (CORS engeli olabilir)
-// ============================================================
-// Müzik proxy sunucu — otomatik algılama (localhost → ngrok → boş)
-const MUSIC_PROXY_BASE = '';
-const _detectMusicProxy = async () => {
-    // 1. Localhost dene
-    try { const r = await fetch('http://localhost:3000/music/list', { signal: AbortSignal.timeout(2000) }); if (r.ok) return 'http://localhost:3000'; } catch(e) {}
-    // 2. ngrok dene
-    try { const r = await fetch('https://impotence-powdery-replace.ngrok-free.dev/music/list', { headers: { 'ngrok-skip-browser-warning': 'true' }, signal: AbortSignal.timeout(5000) }); if (r.ok) return 'https://impotence-powdery-replace.ngrok-free.dev'; } catch(e) {}
-    return '';
-};
-let _musicProxyUrl = '';
-const getMusicProxyUrl = async () => {
-    if (_musicProxyUrl) return _musicProxyUrl;
-    _musicProxyUrl = await _detectMusicProxy();
-    if (_musicProxyUrl) addSystemLog(`Müzik proxy bulundu: ${_musicProxyUrl}`, 'success');
-    return _musicProxyUrl;
-};
-
-// ============================================================
-// LİNKEDİN API SUNUCU AYARLARI
-// linkedin_server.py çalışırken otomatik algılama
-// ============================================================
-let _linkedInServerUrl = '';
-const getLinkedInServerUrl = async () => {
-    if (_linkedInServerUrl) return _linkedInServerUrl;
-    // 1. Localhost dene
-    try { const r = await fetch('http://localhost:3000/', { signal: AbortSignal.timeout(2000) }); if (r.ok) { _linkedInServerUrl = 'http://localhost:3000'; addSystemLog('LinkedIn sunucu bulundu: localhost:3000', 'success'); return _linkedInServerUrl; } } catch(e) {}
-    // 2. ngrok dene
-    try { const r = await fetch('https://impotence-powdery-replace.ngrok-free.dev/', { headers: { 'ngrok-skip-browser-warning': 'true' }, signal: AbortSignal.timeout(5000) }); if (r.ok) { _linkedInServerUrl = 'https://impotence-powdery-replace.ngrok-free.dev'; addSystemLog('LinkedIn sunucu bulundu: ngrok', 'success'); return _linkedInServerUrl; } } catch(e) {}
-    return '';
-};
-
-// LinkedIn API ile doğrudan paylaşım
-const shareToLinkedInAPI = async (text, imageBase64 = null, linkUrl = null, linkTitle = null, videoBase64 = null) => {
-    const baseUrl = await getLinkedInServerUrl();
-    if (!baseUrl) throw new Error('LinkedIn sunucu bulunamadı — linkedin_server.py çalışıyor mu?');
-    
-    const body = { commentary: text };
-    if (imageBase64) body.image_base64 = imageBase64;
-    if (linkUrl) body.link_url = linkUrl;
-    if (linkTitle) body.link_title = linkTitle;
-    if (videoBase64) body.video_base64 = videoBase64;
-    
-    let r;
-    if (videoBase64) {
-        // Video'yu parçalara böl ve ngrok üzerinden gönder (1MB limit çözümü)
-        const base64Data = videoBase64.includes(',') ? videoBase64.split(',')[1] : videoBase64;
-        const byteChars = atob(base64Data);
-        const byteArray = new Uint8Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
-        const videoBlob = new Blob([byteArray], { type: 'video/mp4' });
-        const totalSize = videoBlob.size;
-        const chunkSize = 800 * 1024; // 800KB parçalar (ngrok 1MB altında)
-        const totalChunks = Math.ceil(totalSize / chunkSize);
-        const uploadId = 'vid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-        
-        addSystemLog('Video parçalı yükleme: ' + (totalSize / 1024 / 1024).toFixed(1) + ' MB, ' + totalChunks + ' parça', 'info');
-        
-        // Parçaları sırayla gönder
-        for (let i = 0; i < totalChunks; i++) {
-            const start = i * chunkSize;
-            const end = Math.min(start + chunkSize, totalSize);
-            const chunk = videoBlob.slice(start, end);
-            const formData = new FormData();
-            formData.append('upload_id', uploadId);
-            formData.append('chunk_index', i.toString());
-            formData.append('total_chunks', totalChunks.toString());
-            formData.append('chunk', chunk, 'chunk_' + i + '.bin');
-            
-            const cr = await fetch(`${baseUrl}/linkedin/upload-chunk`, {
-                method: 'POST',
-                body: formData
-            });
-            if (!cr.ok) {
-                const err = await cr.json().catch(() => ({}));
-                throw new Error('Chunk ' + (i+1) + ' yükleme hatası: ' + (err.detail || cr.status));
-            }
-            addSystemLog('Parça ' + (i+1) + '/' + totalChunks + ' yüklendi', 'info');
-        }
-        
-        // Birleştirilmiş videoyu LinkedIn'e yükle
-        addSystemLog('Video LinkedIn\'e yükleniyor...', 'info');
-        const shareForm = new FormData();
-        shareForm.append('upload_id', uploadId);
-        shareForm.append('commentary', text);
-        r = await fetch(`${baseUrl}/linkedin/share-chunked`, {
-            method: 'POST',
-            body: shareForm
-        });
-    } else {
-        r = await fetch(`${baseUrl}/linkedin/share`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-    }
-    
-    if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.detail || `LinkedIn API hatası: ${r.status}`);
-    }
-    return await r.json();
-};
-
-// Blob URL'yi base64'e çevir + boyut kontrolü
-const blobUrlToBase64 = async (blobUrl) => {
-    const response = await fetch(blobUrl);
-    const blob = await response.blob();
-    const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-    addSystemLog('Video dosya boyutu: ' + sizeMB + ' MB', 'info');
-    
-    // 100MB üzeri videoyu reddet
-    if (blob.size > 100 * 1024 * 1024) {
-        throw new Error('Video çok büyük (' + sizeMB + ' MB). LinkedIn limiti 100MB.');
-    }
-    
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-};
-
-// Sunucu üzerinden müzik indir (CORS yok — sunucu tarafı fetch)
-const fetchViaMusicProxy = async (fileId) => {
-    const baseUrl = await getMusicProxyUrl();
-    if (!baseUrl) throw new Error('Müzik proxy sunucusu bulunamadı');
-    const proxyUrl = `${baseUrl}/music/proxy/${fileId}`;
-    const r = await fetch(proxyUrl, {
-        headers: { 'ngrok-skip-browser-warning': 'true' }
-    });
-    if (!r.ok) throw new Error(`Proxy hatası: ${r.status}`);
-    return r;
-};
-
-// Wikimedia Commons'tan gerçek görsel çek (Atatürk vb. — Imagen üretemez)
-// Wikimedia CORS header verdiği için proxy'ye gerek yok, doğrudan fetch
-const fetchWikimediaImages = async (query, limit = 3) => {
-    try {
-        const searchUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=filetype:bitmap+${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=${limit}&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=1280&format=json`;
-        const r = await fetch(searchUrl);
-        if (!r.ok) return [];
-        const data = await r.json();
-        const images = [];
-        const pages = data.query?.pages || {};
-        for (const page of Object.values(pages)) {
-            const ii = page.imageinfo?.[0];
-            if (ii?.mime?.startsWith('image/')) {
-                images.push(ii.thumburl || ii.url);
-            }
-        }
-        return images;
-    } catch (e) { return []; }
-};
-
-// Google Drive HTML sayfasından gerçek download URL'ini çıkar
-const extractDriveDownloadUrl = (html) => {
-    const actionMatch = html.match(/action="([^"]*drive\.usercontent\.google\.com[^"]*)"/);
-    if (actionMatch) return actionMatch[1].replace(/&amp;/g, '&');
-    const hrefMatch = html.match(/href="(\/uc\?export=download[^"]*)"/);
-    if (hrefMatch) return 'https://drive.google.com' + hrefMatch[1].replace(/&amp;/g, '&');
-    return null;
-};
-
-// CORS proxy listesi — son çare olarak denenir
-const CORS_PROXIES = [
-    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-];
 
 // ============================================================
 // AI CLIENT — Fallback zinciri: NVIDIA (ücretsiz) → Gemini (ücretsiz eski modeller)
@@ -408,6 +14,117 @@ const setNvidiaModel = (m) => { NV_MODEL = m; };
 // ama kullanıcı Gemini key girerse devreye girer.
 const GEMINI_FALLBACK_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-flash-latest'];
 const GEMINI_CHAT_URL = (model) => `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+// ============================================================
+// ÇOKLU AI SAĞLAYICI HAVUZU (OpenAI-uyumlu gateways)
+// Ücretsiz LLM kaynakları: cheahjs/free-llm-api-resources, mnfst/awesome-free-llm-apis,
+// open-free-llm-api/awesome-freellm-apis ve benzeri repo'lardan derlendi.
+// Kullanıcı UI'dan sağlayıcı + key girer (sessionStorage). Kodda hardcoded key yok.
+// Sıra: NVIDIA -> OpenAI-uyumlu gateways -> Gemini
+// ============================================================
+// Her sağlayıcı için ayrı sessionStorage anahtarı
+const PROVIDER_STORAGE = {
+  openrouter: 'ns_k_openrouter',
+  zenmux: 'ns_k_zenmux',
+  bluesminds: 'ns_k_bluesminds',
+  mimo: 'ns_k_mimo',
+  groq: 'ns_k_groq',
+  github: 'ns_k_github',
+  cerebras: 'ns_k_cerebras',
+  cohere: 'ns_k_cohere',
+  mistral: 'ns_k_mistral',
+  fireworks: 'ns_k_fireworks',
+  hyperbolic: 'ns_k_hyperbolic',
+  sambanova: 'ns_k_sambanova',
+  nebius: 'ns_k_nebius',
+  scaleway: 'ns_k_scaleway',
+  huggingface: 'ns_k_huggingface',
+  opencodezen: 'ns_k_opencodezen',
+  vercel: 'ns_k_vercel',
+  llm7: 'ns_k_llm7',
+  kluster: 'ns_k_kluster',
+  zhipu: 'ns_k_zhipu',
+  xai: 'ns_k_xai',
+  deepseek: 'ns_k_deepseek',
+  siliconflow: 'ns_k_siliconflow',
+  nscale: 'ns_k_nscale',
+  ovh: 'ns_k_ovh',
+  chutes: 'ns_k_chutes',
+  modelscope: 'ns_k_modelscope',
+  ai21: 'ns_k_ai21',
+  pollinations: 'ns_k_pollinations',
+  aion: 'ns_k_aion'
+};
+const getProviderKey = (id) => { try { return sessionStorage.getItem(PROVIDER_STORAGE[id] || '') || ''; } catch (e) { return ''; } };
+const setProviderKey = (id, k) => { try { const s = PROVIDER_STORAGE[id]; if (!s) return; if (k) sessionStorage.setItem(s, k); else sessionStorage.removeItem(s); } catch (e) {} };
+
+// OpenAI-uyumlu sağlayıcı tanımları (ücretsiz LLM kaynaklarından)
+const AI_PROVIDERS = [
+  { id: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1/chat/completions', models: ['openai/gpt-4o-mini', 'nvidia/nemotron-3-super-120b-a12b:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-flash-1.5', 'qwen/qwen3-coder:free'], isJsonOk: true },
+  { id: 'zenmux', label: 'ZenMUX.ai', baseUrl: 'https://ai.zenmux.io/v1/chat/completions', models: ['gpt-4o-mini', 'claude-3.5-haiku', 'gemini-1.5-flash'], isJsonOk: true },
+  { id: 'bluesminds', label: 'BluesMinds', baseUrl: 'https://api.bluesminds.com/v1/chat/completions', models: ['gpt-4o-mini', 'llama-3.1-70b', 'nemotron-70b'], isJsonOk: true },
+  { id: 'mimo', label: 'Mimo', baseUrl: 'https://api.mimo.example/v1/chat/completions', models: ['gpt-4o-mini'], isJsonOk: true },
+  { id: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1/chat/completions', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'gemma2-9b-it'], isJsonOk: true },
+  { id: 'github', label: 'GitHub Models', baseUrl: 'https://models.inference.ai.azure.com/chat/completions', models: ['gpt-4o', 'gpt-4o-mini', 'Phi-4', 'DeepSeek-R1', 'Llama-3.3-70B-Instruct'], isJsonOk: false },
+  { id: 'cerebras', label: 'Cerebras', baseUrl: 'https://api.cerebras.ai/v1/chat/completions', models: ['llama-3.3-70b', 'gpt-oss-120b', 'llama3.1-8b'], isJsonOk: true },
+  { id: 'cohere', label: 'Cohere', baseUrl: 'https://api.cohere.com/compatibility/v1/chat/completions', models: ['command-r-plus', 'command-r7b-12-2024', 'c4ai-aya-expanse-32b'], isJsonOk: true },
+  { id: 'mistral', label: 'Mistral', baseUrl: 'https://api.mistral.ai/v1/chat/completions', models: ['mistral-small-latest', 'open-mistral-7b', 'ministral-3b-latest'], isJsonOk: true },
+  { id: 'fireworks', label: 'Fireworks', baseUrl: 'https://api.fireworks.ai/inference/v1/chat/completions', models: ['accounts/fireworks/models/llama-v3p3-70b-instruct', 'accounts/fireworks/models/deepseek-r1'], isJsonOk: true },
+  { id: 'hyperbolic', label: 'Hyperbolic', baseUrl: 'https://api.hyperbolic.xyz/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'], isJsonOk: true },
+  { id: 'sambanova', label: 'SambaNova', baseUrl: 'https://api.sambanova.ai/v1/chat/completions', models: ['Meta-Llama-3.3-70B-Instruct', 'DeepSeek-V3-0324', 'Qwen3-235B-A22B'], isJsonOk: true },
+  { id: 'nebius', label: 'Nebius', baseUrl: 'https://api.nebius.ai/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'], isJsonOk: true },
+  { id: 'scaleway', label: 'Scaleway', baseUrl: 'https://api.scaleway.ai/v1/chat/completions', models: ['meta/llama-3.3-70b-instruct', 'qwen3-235b-a22b-instruct-2507', 'deepseek-v3.2'], isJsonOk: true },
+  { id: 'huggingface', label: 'HuggingFace', baseUrl: 'https://router.huggingface.co/v1/chat/completions', models: ['meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen3-235B-A22B', 'deepseek-ai/DeepSeek-V3-0324'], isJsonOk: true },
+  { id: 'opencodezen', label: 'OpenCode Zen', baseUrl: 'https://api.opencode.ai/v1/chat/completions', models: ['nemotron-3-super-free', 'deepseek-v4-flash-free', 'big-pickle-stealth'], isJsonOk: true },
+  { id: 'vercel', label: 'Vercel AI GW', baseUrl: 'https://ai-gateway.vercel.sh/v1/chat/completions', models: ['gpt-4o-mini', 'meta/llama-3.3-70b-instruct', 'google/gemini-2.0-flash'], isJsonOk: true },
+  { id: 'llm7', label: 'LLM7.io', baseUrl: 'https://api.llm7.io/v1/chat/completions', models: ['gpt-4o-mini', 'deepseek-r1', 'qwen2.5-coder-32b', 'llama-3.3-70b'], isJsonOk: true },
+  { id: 'kluster', label: 'Kluster AI', baseUrl: 'https://api.kluster.ai/v1/chat/completions', models: ['deepseek-r1', 'llama-4-maverick', 'qwen3-235b'], isJsonOk: true },
+  { id: 'zhipu', label: 'Zhipu AI (GLM)', baseUrl: 'https://open.bigmodel.cn/api/paite/v4/chat/completions', models: ['glm-4.7-flash', 'glm-4.5-flash', 'glm-4.6v-flash'], isJsonOk: true },
+  { id: 'xai', label: 'xAI (Grok)', baseUrl: 'https://api.x.ai/v1/chat/completions', models: ['grok-3-mini', 'grok-2', 'grok-beta'], isJsonOk: true },
+  { id: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1/chat/completions', models: ['deepseek-chat', 'deepseek-reasoner'], isJsonOk: true },
+  { id: 'siliconflow', label: 'SiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1/chat/completions', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B', 'meta-llama/Llama-3.3-70B-Instruct'], isJsonOk: true },
+  { id: 'nscale', label: 'Nscale', baseUrl: 'https://api.nscale.com/v1/chat/completions', models: ['meta/llama-3.3-70b-instruct', 'deepseek/deepseek-v3', 'qwen/qwen3-235b'], isJsonOk: true },
+  { id: 'ovh', label: 'OVHcloud AI', baseUrl: 'https://ai-endpoints.ovhcloud.com/api/openai/v1/chat/completions', models: ['DeepSeek-R1', 'Llama-3.3-70B-Instruct', 'Qwen2.5-72B-Instruct'], isJsonOk: true },
+  { id: 'chutes', label: 'Chutes', baseUrl: 'https://llm.chutes.ai/v1/chat/completions', models: ['deepseek-ai/DeepSeek-V3', 'meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen3-235B-A22B'], isJsonOk: true },
+  { id: 'modelscope', label: 'ModelScope', baseUrl: 'https://api.modelscope.cn/v1/chat/completions', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B', 'meta-llama/Llama-3.3-70B-Instruct'], isJsonOk: true },
+  { id: 'ai21', label: 'AI21', baseUrl: 'https://api.ai21.com/v1/chat/completions', models: ['jamba-1.5-large', 'jamba-1.5-mini', 'jamba2-90b'], isJsonOk: true },
+  { id: 'pollinations', label: 'Pollinations AI', baseUrl: 'https://text.pollinations.ai/openai', models: ['openai', 'mistral', 'llama', 'gemini'], isJsonOk: true },
+  { id: 'aion', label: 'Aion Labs', baseUrl: 'https://api.aionlabs.ai/v1/chat/completions', models: ['Aion 2.5', 'Aion 2.0', 'Aion-RP 1.0'], isJsonOk: true }
+];
+const getProviderById = (id) => AI_PROVIDERS.find(p => p.id === id);
+
+// Tüm OpenAI-uyumlu sağlayıcılar için ortak çağrı
+const callOpenAICompatible = async (provider, systemPrompt, userPrompt, opts = {}) => {
+    const key = getProviderKey(provider.id);
+    if (!key) throw new Error(provider.label + ' anahtarı girilmemiş.');
+    const models = opts.model ? [opts.model] : provider.models;
+    let lastErr = '';
+    for (const model of models) {
+        try {
+            const body = {
+                model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                temperature: opts.temperature != null ? opts.temperature : 0.7,
+                max_tokens: opts.max_tokens || 4096,
+                stream: false
+            };
+            if (opts.json && provider.isJsonOk) body.response_format = { type: 'json_object' };
+            const headers = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
+            if (provider.id === 'openrouter') headers['HTTP-Referer'] = window.location.origin || 'https://example.com';
+            const r = await fetch(provider.baseUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+            if (!r.ok) { lastErr = provider.label + ' (' + model + ') ' + r.status; continue; }
+            const data = await r.json();
+            const content = data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : '';
+            if (!content) { lastErr = provider.label + ' boş yanıt'; continue; }
+            return _parseAIContent(content, opts.json);
+        } catch (e) { lastErr = provider.label + ': ' + e.message; }
+    }
+    throw new Error(lastErr || provider.label + ' başarısız.');
+};
+
 
 // Metni NVIDIA'dan üret
 const callNvidiaChat = async (systemPrompt, userPrompt, opts = {}) => {
@@ -477,63 +194,46 @@ const _parseAIContent = (content, isJson) => {
     }
 };
 
-// ANA FALLBACK ZİNCİRİ: önce NVIDIA, sonra Gemini ücretsiz modelleri.
-// NVIDIA key yoksa direkt Gemini'ye geçilir; Gemini key de yoksa hata verilir.
+// ANA FALLBACK ZİNCİRİ: NVIDIA -> OpenAI-uyumlu sağlayıcılar -> Gemini
+// Herhangi biri başarılı olursa döner; hepsi başarısızsa hata verir.
 const callAI = async (systemPrompt, userPrompt, opts = {}) => {
-    const hasNv = !!getApiKey();
-    const hasGem = !!getGeminiKey();
-    if (!hasNv && !hasGem) throw new Error('Hiçbir API anahtarı girilmemiş. NVIDIA veya Gemini key gerekli.');
-    if (hasNv) {
+    const errors = [];
+    if (getApiKey()) {
         try {
             const res = await callNvidiaChat(systemPrompt, userPrompt, opts);
             addSystemLog('Metin NVIDIA ile üretildi.', 'success');
             return res;
-        } catch (nvErr) {
-            addSystemLog('NVIDIA başarısız, Gemini ücretsiz modele geçiliyor: ' + nvErr.message, 'warn');
-        }
+        } catch (e) { errors.push('NVIDIA: ' + e.message); addSystemLog('NVIDIA başarısız: ' + e.message, 'warn'); }
     }
-    if (hasGem) {
+    for (const provider of AI_PROVIDERS) {
+        if (!getProviderKey(provider.id)) continue;
+        try {
+            const res = await callOpenAICompatible(provider, systemPrompt, userPrompt, opts);
+            addSystemLog('Metin ' + provider.label + ' ile üretildi.', 'success');
+            return res;
+        } catch (e) { errors.push(provider.label + ': ' + e.message); addSystemLog(provider.label + ' başarısız: ' + e.message, 'warn'); }
+    }
+    if (getGeminiKey()) {
         try {
             const res = await callGeminiChat(systemPrompt, userPrompt, opts);
             addSystemLog('Metin Gemini fallback ile üretildi.', 'success');
             return res;
-        } catch (gmErr) {
-            throw new Error(`Tüm AI sağlayıcıları başarısız. ${hasNv ? 'NVIDIA: ' + nvErr?.message + ' | ' : ''}Gemini: ${gmErr.message}`);
-        }
-    } else {
-        throw new Error('NVIDIA başarısız ve Gemini anahtarı girilmemiş. Lütfen Gemini key girin.');
+        } catch (e) { errors.push('Gemini: ' + e.message); addSystemLog('Gemini başarısız: ' + e.message, 'warn'); }
     }
+    throw new Error('Tüm AI sağlayıcıları başarısız:\n' + errors.join('\n'));
 };
 
+// Yerel müzik kütüphanesinden id/url ile çözüm (GDrive kaldırıldı H1.152)
 const fetchWithCorsProxy = async (url) => {
-    // 1. Müzik proxy sunucusu varsa önce onu dene (en güvenilir)
-    const fileId = new URL(url).searchParams.get('id');
-    const proxyUrl = await getMusicProxyUrl();
-    if (proxyUrl && fileId) {
-        try { return await fetchViaMusicProxy(fileId); } catch(e) {}
+    if (url && (url.startsWith('/Muzik/') || url.startsWith('blob:') || url.startsWith('data:'))) {
+        try { const r = await fetch(url); if (r.ok) return r; } catch(e) {}
     }
-    // 2. Doğrudan dene
-    try {
-        const r = await fetch(url);
-        if (r.ok) {
-            const ct = r.headers.get('content-type') || '';
-            if (!ct.includes('text/html')) return r;
-            const html = await r.text();
-            const realUrl = extractDriveDownloadUrl(html);
-            if (realUrl) { const r2 = await fetch(realUrl); if (r2.ok) return r2; }
-        }
-    } catch(e) {}
-    // 3. Proxy'lerle dene
-    for (const proxy of CORS_PROXIES) {
-        try {
-            const r = await fetch(proxy(url));
-            if (r.ok) {
-                const ct = r.headers.get('content-type') || '';
-                if (!ct.includes('text/html')) return r;
-            }
-        } catch(e) {}
+    const idMatch = typeof url === 'string' ? url.match(/local_([a-zA-Z0-9_]+)/) : null;
+    if (idMatch) {
+        const localUrl = (typeof getMusicUrlById === 'function') ? (getMusicUrlById(url) || getMusicUrlById('local_' + idMatch[1])) : null;
+        if (localUrl) { try { const r = await fetch(localUrl); if (r.ok) return r; } catch(e) {} }
     }
-    throw new Error('Müzik indirilemedi. Sunucu çalıştığından ve Google Drive dosyasının herkese açık olduğundan emin olun.');
+    throw new Error('Müzik bulunamadı. public/Muzik/ klasörünü kontrol edin.');
 };
 
 // API anahtarı artık UI'dan girilir (sessionStorage). Kodda hardcoded değil.
@@ -553,6 +253,8 @@ const setGeminiKey = (k) => {
     try { if (k) sessionStorage.setItem(GEMINI_API_KEY_STORAGE, k); else sessionStorage.removeItem(GEMINI_API_KEY_STORAGE); } catch (e) {}
 };
 
+// ============================================================
+// YEREL MÜZİK KÜTÜPHANESİ (GDrive kaldırıldı H1.152)
 const SafeStorage = {
     memoryStore: {},
     getItem: (key) => { try { return localStorage.getItem(key); } catch (e) { return SafeStorage.memoryStore[key] || null; } },
@@ -1496,7 +1198,7 @@ JSON formatında dön.`;
             tiktokTitle: hook.substring(0, 60),
             tiktokDescription: lead,
             tiktokHashtags: hashtags.slice(0, 10).map(h => h.startsWith('#') ? h : '#' + h),
-            _suggestedMusic: isAtaturkRelated ? 'gd_14byzbYGcpQ3Lcn7cMpwLOAsZS9NCfKLR' : null,
+            _suggestedMusic: isAtaturkRelated ? (LOCAL_MUSIC_LIBRARY.find(m => /ataturk|istiklal|istiklal mars|vatan|cumhuriyet/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id) || null) : null,
             _isAtaturkRelated: isAtaturkRelated,
             _realImageUrls: [],
             mediaBlackout: { show: false, percentageCovered: 0, percentageIgnored: 0, mediaNames: [], explanation: "" },
@@ -2661,6 +2363,9 @@ const RenderWorkerService = {
                         { label: cta.like, icon: 'heart', delay: 2.2, color1: '#E91E63', color2: '#FF5C8A' },
                         { label: cta.share, icon: 'share', delay: 2.6, color1: '#2196F3', color2: '#64B5F6' }
                     ];
+// ============================================================
+// AI CLIENT — Fallback zinciri: NVIDIA (ücretsiz) → Gemini (ücretsiz eski modeller)
+
 
                     const btnAreaY = h * 0.58;
                     const btnRadius = Math.min(w * 0.12, 55);
@@ -2826,20 +2531,28 @@ const RenderWorkerService = {
                         bgmNode.connect(masterGain);
                         masterGain.connect(audioDest);
                     }
-                } else if (musicId.startsWith('gd_')) {
+                } else if (musicId && (musicId.startsWith('local_') || musicId.startsWith('gd_'))) {
                     try {
                         const savedUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC');
                         if (savedUrl) {
-                            let res;
-                            if (savedUrl.startsWith('data:') || savedUrl.startsWith('blob:')) { res = await fetch(savedUrl); }
-                            else { res = await fetchWithCorsProxy(savedUrl); }
+                            const res = await fetch(savedUrl);
                             const buf = await audioCtx.decodeAudioData(await res.arrayBuffer());
                             if (!bgmInitialized) { bgmSource = audioCtx.createBufferSource(); bgmSource.buffer = buf; bgmSource.loop = true; bgmInitialized = true; }
                             masterGain = audioCtx.createGain();
                             masterGain.gain.value = 0.3;
                             bgmSource.connect(masterGain); masterGain.connect(audioDest); bgmSource.start(0);
+                        } else {
+                            const track = LOCAL_MUSIC_LIBRARY.find(m => m.id === musicId);
+                            if (track) {
+                                const res = await fetch(track.url);
+                                const buf = await audioCtx.decodeAudioData(await (await res.blob()).arrayBuffer());
+                                if (!bgmInitialized) { bgmSource = audioCtx.createBufferSource(); bgmSource.buffer = buf; bgmSource.loop = true; bgmInitialized = true; }
+                                masterGain = audioCtx.createGain();
+                                masterGain.gain.value = 0.3;
+                                bgmSource.connect(masterGain); masterGain.connect(audioDest); bgmSource.start(0);
+                            }
                         }
-                    } catch (e) { console.warn("Google Drive müziği okunamadı", e); }
+                    } catch (e) { console.warn("Yerel müzik okunamadı", e); }
                 } else {
                     try {
                         const track = await AssetManagerService.getMusicFromLib(musicId);
@@ -3536,15 +3249,24 @@ export default function App() {
     // NVIDIA + Gemini API key'leri + model (sessionStorage'da tutulur, kodda hardcoded değil)
     const [apiKeyInput, setApiKeyInput] = useState(() => getApiKey());
     const [geminiKeyInput, setGeminiKeyInput] = useState(() => getGeminiKey());
+    const [providerInputs, setProviderInputs] = useState(() => {
+        const o = {};
+        for (const p of AI_PROVIDERS) o[p.id] = getProviderKey(p.id);
+        return o;
+    });
     const [nvidiaModel, setNvidiaModel] = useState(() => NV_MODEL);
     const [showApiKeyPanel, setShowApiKeyPanel] = useState(() => !getApiKey() && !getGeminiKey());
     const saveApiKey = () => {
         setApiKey(apiKeyInput.trim());
         setGeminiKey(geminiKeyInput.trim());
+        for (const p of AI_PROVIDERS) setProviderKey(p.id, (providerInputs[p.id] || '').trim());
         const m = nvidiaModel.trim() || NV_MODEL;
         setNvidiaModel(m);
-        addSystemLog('API anahtarları kaydedildi (NVIDIA + Gemini).', 'success');
+        addSystemLog('API anahtarları kaydedildi (NVIDIA + Gemini + ' + AI_PROVIDERS.length + ' sağlayıcı).', 'success');
         setShowApiKeyPanel(false);
+    };
+    const fillProvidedKeys = () => {
+        addSystemLog('Anahtarları tarayıcı konsolundan veya elle girin. Hazır anahtarlar güvenlik nedeniyle koda gömülmez.', 'info');
     };
 
     const [studioMedia, setStudioMedia] = useState({ outroUrl: null, musicLoaded: false, musicName: '', musicId: '', musicList: [], customSceneImages: [], isLoading: true, statusMsg: 'Bulut Kontrol Ediliyor...', syncedFolderName: '' });
@@ -3567,12 +3289,9 @@ export default function App() {
             { value: 'fire', label: '🔥 Şömine', color: 'text-orange-300' },
         ]}
     ];
-    // Yerel müzikler (IndexedDB'den)
-    const filteredMusicList = studioMedia.musicList.filter(m => !musicSearchQuery || m.name.toLowerCase().includes(musicSearchQuery.toLowerCase()));
-    if (filteredMusicList.length > 0) ambientOptions.push({ label: 'Müziklerim', options: filteredMusicList.map(m => ({ value: m.id, label: `🎵 ${m.name.replace(/\.[^.]+$/, '')}`, color: 'text-violet-400' })) });
-    // Google Drive müzikleri (hardcode listesi)
-    const filteredGDMusic = GOOGLE_DRIVE_MUSIC.filter(m => !musicSearchQuery || m.name.toLowerCase().includes(musicSearchQuery.toLowerCase()));
-    if (filteredGDMusic.length > 0) ambientOptions.push({ label: `☁️ Google Drive (${filteredGDMusic.length})`, options: filteredGDMusic.map(m => ({ value: `gd_${m.id}`, label: `🎶 ${m.name}`, color: 'text-emerald-400' })) });
+    // Yerel müzikler (public/Muzik/)
+    const filteredMusicList = LOCAL_MUSIC_LIBRARY.filter(m => !musicSearchQuery || m.title.toLowerCase().includes(musicSearchQuery.toLowerCase()));
+    if (filteredMusicList.length > 0) ambientOptions.push({ label: `🎵 Yerel Müzik (${filteredMusicList.length})`, options: filteredMusicList.map(m => ({ value: m.id, label: `🎶 ${m.title}`, color: 'text-violet-400' })) });
 
     const voiceOptions = [
         { value: 'none', label: '🔇 Ses Yok', color: 'text-rose-400 font-bold' },
@@ -3799,9 +3518,9 @@ export default function App() {
                 if (detectedUrl) addSystemLog(`Sunucu bulundu: ${detectedUrl}`, 'success');
                 else addSystemLog('Müzik proxy sunucusu bulunamadı — CORS proxy kullanılacak', 'warn');
 
-                // Google Drive klasöründen müzikleri otomatik keşfet
-                const gdCount = await fetchGoogleDriveMusic();
-                addSystemLog(`Google Drive: ${gdCount} müzik bulundu.`, 'info');
+                // Yerel müzik kütüphanesi (public/Muzik/) otomatik yüklenir
+                const gdCount = LOCAL_MUSIC_LIBRARY.length;
+                addSystemLog(`Yerel müzik: ${gdCount} parça bulundu (public/Muzik/).`, 'info');
 
                 const allMusic = await AssetManagerService.getAllMusicFromLib();
                 setStudioMedia(s => ({ ...s, musicList: [...allMusic], isLoading: false, statusMsg: 'Yerel Mod' }));
@@ -3942,7 +3661,7 @@ export default function App() {
     const handleOutroDelete = async () => { await AssetManagerService.deleteMedia('CUSTOM_OUTRO'); setStudioMedia(s => ({ ...s, outroUrl: null })); await saveToFirestore({ outroChunksCount: null, backCover: null }); };
     const handleCustomSceneImagesUpload = async (e) => { const files = Array.from(e.target.files); if (!files.length) return; const availableSlots = 999 - (studioMedia.customSceneImages?.length || 0); const filesToProcess = files.slice(0, availableSlots); const newB64s = []; for (let file of filesToProcess) { if (file.type.startsWith('image/')) { const b64 = await NetworkUtils.compressImage(file); newB64s.push(b64); } } const updatedImages = [...(studioMedia.customSceneImages || []), ...newB64s].slice(0, 5); for (let i = 0; i < updatedImages.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updatedImages[i]); setStudioMedia(s => ({ ...s, customSceneImages: updatedImages })); const newMediaFiles = newB64s.map((b64, i) => ({ name: `SabitGorsel_${Date.now()}_${i}.jpg`, type: 'image/jpeg', data: b64 })); if (newMediaFiles.length > 0) setUiState(prev => ({ ...prev, selectedMediaFiles: [...prev.selectedMediaFiles, ...newMediaFiles] })); e.target.value = null; };
     const handleCustomSceneImageDelete = async (idx) => { const updated = studioMedia.customSceneImages.filter((_, i) => i !== idx); for (let i = 0; i < 999; i++) await AssetManagerService.deleteMedia("CUSTOM_SCENE_IMG_" + i); for (let i = 0; i < updated.length; i++) await AssetManagerService.saveMedia("CUSTOM_SCENE_IMG_" + i, updated[i]); setStudioMedia(s => ({ ...s, customSceneImages: updated })); };
-    const deleteMusic = async () => { try { const as = prefs.ambientSound; if (as && !['none', 'rain', 'wind', 'waves', 'fire'].includes(as)) { const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC'); if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl); await AssetManagerService.deleteMedia('CUSTOM_MUSIC'); if (!as.startsWith('gd_')) { await AssetManagerService.removeMusicFromLib(as); const updatedList = studioMedia.musicList.filter(m => m.id !== as); await saveToFirestore({ bgmList: updatedList, selectedBgmId: null }); } setPrefs(p => ({ ...p, ambientSound: 'none' })); } } catch (e) { } };
+    const deleteMusic = async () => { try { const as = prefs.ambientSound; if (as && !['none', 'rain', 'wind', 'waves', 'fire'].includes(as)) { const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC'); if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl); await AssetManagerService.deleteMedia('CUSTOM_MUSIC'); if (!as.startsWith('local_')) { await AssetManagerService.removeMusicFromLib(as); const updatedList = studioMedia.musicList.filter(m => m.id !== as); await saveToFirestore({ bgmList: updatedList, selectedBgmId: null }); } setPrefs(p => ({ ...p, ambientSound: 'none' })); } } catch (e) { } };
     const handleFolderSelect = async () => {
         if (musicFileInputRef.current) musicFileInputRef.current.click();
     };
@@ -3986,63 +3705,24 @@ export default function App() {
 
     const handleFolderMusicSelect = async (musicId) => {
         if (prefs.ambientSound === musicId) { setPrefs(p => ({ ...p, ambientSound: 'none' })); return; }
-        // Google Drive müziği seçildiyse
-        if (musicId.startsWith('gd_')) {
-            const driveId = musicId.substring(3);
-            const gdTrack = GOOGLE_DRIVE_MUSIC.find(m => m.id === driveId);
-            if (!gdTrack) { addSystemLog("Google Drive müziği bulunamadı", 'error'); return; }
-            addSystemLog(`Google Drive'dan indiriliyor: ${gdTrack.name}...`, 'info');
-            const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC');
-            if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-            try {
-                // Google Drive'dan ses verisini indir (CORS proxy ile)
-                addSystemLog(`İndirme başlatılıyor: ${driveId}...`, 'info');
-                const streamUrl = `https://drive.google.com/uc?export=download&id=${driveId}`;
-                const resp = await fetchWithCorsProxy(streamUrl);
-                const audioBlob = await resp.blob();
-                // HTML sayfası döndüyse kontrol et (Google Drive virüs tarama)
-                if (audioBlob.size < 1000 || (audioBlob.type && audioBlob.type.includes('text/html'))) {
-                    // Küçük dosya veya HTML — muhtemelen hala confirmation sayfası
-                    const text = await audioBlob.text();
-                    if (text.includes('<html') || text.includes('<!DOCTYPE')) {
-                        throw new Error('Google Drive indirme onayı gerekiyor. Dosyayı tarayıcıda açıp manuel indirin veya dosyanın herkese açık olduğundan emin olun.');
-                    }
-                }
-                const reader = new FileReader();
-                const b64 = await new Promise((resolve, reject) => {
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(audioBlob);
-                });
-                // IndexedDB'ye kaydet (render sırasında fetch gerekmez)
-                await AssetManagerService.saveMedia('CUSTOM_MUSIC', b64);
-                setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: gdTrack.name, customBgMusicId: musicId }));
-                // Önizleme için blob URL oluştur ve çal
-                const previewUrl = URL.createObjectURL(audioBlob);
-                playMusicPreview(previewUrl);
-                addSystemLog(`Google Drive müziği indirildi: ${gdTrack.name} (${(audioBlob.size / 1024).toFixed(0)}KB)`, 'success');
-            } catch (e) {
-                addSystemLog(`Google Drive müzik indirme hatası: ${e.message}`, 'error');
-            }
-            return;
-        }
-        // Yerel müzik seçildiyse (IndexedDB)
-        const track = await AssetManagerService.getMusicFromLib(musicId);
-        if (!track || !track.data) { addSystemLog("Müzik bulunamadı", 'error'); return; }
-        addSystemLog(`Müzik hazırlanıyor: ${track.name}`, 'info');
+        // Yerel müzik (public/Muzik/) — doğrudan URL ile çal
+        const track = LOCAL_MUSIC_LIBRARY.find(m => m.id === musicId);
+        if (!track) { addSystemLog("Müzik bulunamadı (public/Muzik/)", 'error'); return; }
+        addSystemLog(`Müzik hazırlanıyor: ${track.title}`, 'info');
         const oldUrl = await AssetManagerService.loadMedia('CUSTOM_MUSIC');
         if (oldUrl && oldUrl.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
-        const raw = track.data.includes(',') ? track.data.split(',')[1] : track.data;
-        const byteString = atob(raw);
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-        const blob = new Blob([ab], { type: 'audio/mpeg' });
-        const url = URL.createObjectURL(blob);
-        await AssetManagerService.saveMedia('CUSTOM_MUSIC', url);
-        setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: track.name, customBgMusicId: musicId }));
-        playMusicPreview(url); // Önizleme çal
-        addSystemLog(`Müzik hazır: ${track.name}`, 'success');
+        try {
+            const resp = await fetch(track.url);
+            if (!resp.ok) throw new Error('Müzik dosyası yüklenemedi: ' + track.url);
+            const audioBlob = await resp.blob();
+            const url = URL.createObjectURL(audioBlob);
+            await AssetManagerService.saveMedia('CUSTOM_MUSIC', url);
+            setPrefs(p => ({ ...p, ambientSound: musicId, customBgMusicName: track.title, customBgMusicId: musicId }));
+            playMusicPreview(url);
+            addSystemLog(`Müzik hazır: ${track.title}`, 'success');
+        } catch (e) {
+            addSystemLog(`Müzik yükleme hatası: ${e.message}`, 'error');
+        }
     };
     const processSelectedFiles = async (files) => { if (!files || files.length === 0) return; if (files.length > 999) { setUiState(prev => ({ ...prev, error: "Sınır yok seçebilirsiniz." })); return; } const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024); try { setUiState(prev => ({ ...prev, isProcessing: true, statusText: "Dosyalar işleniyor..." })); const processedFiles = await Promise.all(validFiles.map(async (file) => { const base64 = await NetworkUtils.fileToBase64(file); return { name: file.name, type: file.type, data: base64 }; })); setUiState(prev => ({ ...prev, selectedMediaFiles: processedFiles, error: '', isProcessing: false, statusText: "" })); } catch (error) { setUiState(prev => ({ ...prev, error: "Dosya okuma hatası.", isProcessing: false, statusText: "" })); } };
     const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
@@ -4063,9 +3743,12 @@ export default function App() {
             // Atatürk içerikli güzel söz → otomatik müzik seçimi
             if (config.tip === 'guzel_soz' && textInput.trim()) {
                 const ataturkKW = ['atatürk', 'mustafa kemal', 'samsun', 'kurtuluş', 'cumhuriyet', 'bağımsızlık', 'milli mücadele', 'inkılap', 'devrim', 'paşa', 'gazi', 'anıtkabir', '19 mayıs'];
-                if (ataturkKW.some(kw => textInput.toLowerCase().includes(kw)) && prefs.ambientSound !== 'gd_14byzbYGcpQ3Lcn7cMpwLOAsZS9NCfKLR') {
-                    addSystemLog('Atatürk içerikli söz → "Bir Daha Gel Samsundan" müziği otomatik seçildi.', 'success');
-                    await handleFolderMusicSelect('gd_14byzbYGcpQ3Lcn7cMpwLOAsZS9NCfKLR');
+                const ataturkMusicId = LOCAL_MUSIC_LIBRARY.find(m => /bir daha gel samsundan|samsun|atatürk/i.test(m.title))?.id || (LOCAL_MUSIC_LIBRARY[0] && LOCAL_MUSIC_LIBRARY[0].id);
+                if (ataturkKW.some(kw => textInput.toLowerCase().includes(kw)) && prefs.ambientSound !== ataturkMusicId) {
+                    if (ataturkMusicId) {
+                        addSystemLog('Atatürk içerikli söz → yerel müzik otomatik seçildi.', 'success');
+                        await handleFolderMusicSelect(ataturkMusicId);
+                    }
                 }
             }
             if (config.tip === 'guzel_soz') {
@@ -4397,7 +4080,11 @@ export default function App() {
                             <ShieldCheck size={18} className="text-amber-400" />
                             <h2 className="text-sm font-bold text-amber-300">API Anahtarları Gerekli</h2>
                         </div>
-                        <p className="text-xs text-slate-400 mb-3">NVIDIA (metin, önce) ve Gemini (görsel + TTS + fallback metin) ayrı anahtarlardır. Anahtarlar tarayıcıda (sessionStorage) saklanır, koda gömülmez. NVIDIA başarısız olursa otomatik Gemini'ye düşer.</p>
+                        <p className="text-xs text-slate-400 mb-3">NVIDIA (metin, önce) ve Gemini (görsel + TTS + fallback metin) ayrı anahtarlardır. Ayrıca {AI_PROVIDERS.length} adet ücretsiz OpenAI-uyumlu sağlayıcı fallback zincirine eklenmiştir. Anahtarlar tarayıcıda (sessionStorage) saklanır, koda gömülmez.</p>
+                        <button
+                            onClick={fillProvidedKeys}
+                            className="mb-3 w-full bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2 rounded-lg transition-colors"
+                        >ℹ️ Anahtarları Nereye Gireceğimi Bilmiyorum</button>
                         <label className="block text-xs text-slate-400 mb-1">NVIDIA API Key (nvapi-...)</label>
                         <input
                             type="password"
@@ -4414,6 +4101,20 @@ export default function App() {
                             placeholder="AIza..."
                             className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white mb-3 focus:outline-none focus:border-amber-400"
                         />
+                        <div className="grid grid-cols-2 gap-2 mb-3">
+                        {AI_PROVIDERS.map(p => (
+                            <div key={p.id}>
+                                <label className="block text-[10px] text-slate-400 mb-1">{p.label}</label>
+                                <input
+                                    type="password"
+                                    value={providerInputs[p.id] || ''}
+                                    onChange={(e) => setProviderInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
+                                    placeholder={p.label + ' key'}
+                                    className="w-full bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                                />
+                            </div>
+                        ))}
+                        </div>
                         <label className="block text-xs text-slate-400 mb-1">NVIDIA Model</label>
                         <input
                             type="text"
